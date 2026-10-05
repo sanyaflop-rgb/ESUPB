@@ -27,6 +27,9 @@ source .venv/Scripts/activate
 pip install -e ".[dev]"
 copy ..\.env.example .env  # Windows CMD; в Git Bash: cp ../.env.example .env
 alembic upgrade head
+# Указать PK_CONTROL_INITIAL_ADMIN_LOGIN и PK_CONTROL_INITIAL_ADMIN_PASSWORD в .env,
+# затем один раз создать администратора:
+python -m app.scripts.bootstrap_admin
 uvicorn app.main:app --reload --port 8000
 ```
 
