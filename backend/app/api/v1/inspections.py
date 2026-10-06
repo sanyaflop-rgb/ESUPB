@@ -1,7 +1,8 @@
+import json
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,6 +22,9 @@ from app.schemas.inspections import (
     DeadlineChangeCreate,
     DeadlineChangeResponse,
     EliminationCreate,
+    ImportConfirm,
+    ImportConfirmResponse,
+    ImportPreviewResponse,
     InspectionCreate,
     InspectionResponse,
     InspectionStateChange,
@@ -35,6 +39,7 @@ from app.schemas.inspections import (
     ViolationUpdate,
 )
 from app.services.audit import record_audit
+from app.services.imports import parse_import_file, preview_rows
 from app.services.inspections import (
     calculate_measure_status,
     calculate_violation_status,
@@ -172,7 +177,7 @@ def list_inspections(_: User = Depends(get_current_user), database: Session = De
 @router.post("/inspections", response_model=InspectionResponse, status_code=status.HTTP_201_CREATED)
 def create_inspection(payload: InspectionCreate, writer: User = RequireWriter, database: Session = Depends(get_db)) -> Inspection:
     validate_inspection_references(database, payload.control_type_id, payload.inspection_kind_id)
-    validate_inspection_location(database, payload.inspection_kind_id, payload.department_id, payload.object_id)
+    validate_inspection_location(database, payload.control_type_id, payload.inspection_kind_id, payload.department_id, payload.object_id)
     normalized_number = normalize_document_number(payload.document_number)
     ensure_unique_document_number(database, payload.control_type_id, normalized_number)
     item = Inspection(
@@ -209,12 +214,12 @@ def update_inspection(inspection_id: UUID, payload: InspectionUpdate, writer: Us
     item = get_inspection(database, inspection_id)
     ensure_inspection_editable(item)
     old_value = inspection_snapshot(item)
-    next_kind_id = payload.inspection_kind_id if payload.inspection_kind_id is not None else item.inspection_kind_id
+    next_kind_id = payload.inspection_kind_id if "inspection_kind_id" in payload.model_fields_set else item.inspection_kind_id
     next_department_id = payload.department_id if "department_id" in payload.model_fields_set else item.department_id
     next_object_id = payload.object_id if "object_id" in payload.model_fields_set else item.object_id
     validate_inspection_references(database, item.control_type_id, next_kind_id)
-    validate_inspection_location(database, next_kind_id, next_department_id, next_object_id)
-    if payload.inspection_kind_id is not None:
+    validate_inspection_location(database, item.control_type_id, next_kind_id, next_department_id, next_object_id)
+    if "inspection_kind_id" in payload.model_fields_set:
         item.inspection_kind_id = payload.inspection_kind_id
     if "department_id" in payload.model_fields_set:
         item.department_id = payload.department_id
@@ -247,6 +252,71 @@ def change_inspection_state(inspection_id: UUID, payload: InspectionStateChange,
     database.commit()
     database.refresh(item)
     return item
+
+
+@router.post("/inspections/{inspection_id}/imports/confirm", response_model=ImportConfirmResponse, status_code=status.HTTP_201_CREATED)
+def confirm_import(inspection_id: UUID, payload: ImportConfirm, writer: User = RequireWriter, database: Session = Depends(get_db)) -> ImportConfirmResponse:
+    inspection = get_inspection(database, inspection_id)
+    ensure_inspection_editable(inspection)
+    control_type = get_control_type(database, inspection)
+    created_measures = 0
+    try:
+        for row in payload.rows:
+            values = row.model_dump()
+            validate_deadline_fields(control_type, values)
+            measures = validate_measure_references(database, values["measures"])
+            violation_type = validate_violation_type(database, row.violation_type_id)
+            violation = Violation(
+                inspection_id=inspection.id,
+                formulation=row.formulation.strip(),
+                violated_requirement=row.violated_requirement.strip(),
+                violation_type_id=violation_type.id,
+                severity=violation_type.severity,
+                document_received_date=row.document_received_date,
+                created_by_id=writer.id,
+                updated_by_id=writer.id,
+            )
+            database.add(violation)
+            database.flush()
+            measures_created = add_measures(database, violation, measures)
+            created_measures += len(measures_created)
+            record_audit(database, actor_id=writer.id, entity_type="violations", entity_id=violation.id, action="import", new_value=violation_snapshot(database, violation))
+            for measure in measures_created:
+                record_audit(database, actor_id=writer.id, entity_type="violation_measures", entity_id=measure.id, action="import", new_value=measure_snapshot(measure))
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    return ImportConfirmResponse(created_violations=len(payload.rows), created_measures=created_measures)
+
+
+@router.post("/inspections/{inspection_id}/imports/preview", response_model=ImportPreviewResponse)
+async def preview_import(
+    inspection_id: UUID,
+    file: UploadFile = File(...),
+    mapping: str = Form(...),
+    header_row: int = Form(default=1),
+    _: User = RequireWriter,
+    database: Session = Depends(get_db),
+) -> ImportPreviewResponse:
+    get_inspection(database, inspection_id)
+    try:
+        field_mapping = json.loads(mapping)
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Некорректное сопоставление колонок") from error
+    if not isinstance(field_mapping, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in field_mapping.items()):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Некорректное сопоставление колонок")
+    content = await file.read()
+    headers, rows = parse_import_file(file.filename or "импорт", content, header_row)
+    resolved_mapping, preview = preview_rows(headers, rows, field_mapping)
+    return ImportPreviewResponse(
+        file_name=file.filename or "импорт",
+        headers=headers,
+        mapping=resolved_mapping,
+        rows=preview,
+        valid_rows=sum(not row["errors"] for row in preview),
+        invalid_rows=sum(bool(row["errors"]) for row in preview),
+    )
 
 
 @router.get("/inspections/{inspection_id}/violations", response_model=list[ViolationResponse])

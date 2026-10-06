@@ -16,3 +16,4 @@
 .measure-card-header strong { font-size: 14px; color: #1e3550; }
 .measure-card-body { display: grid; gap: 5px; font-size: 13px; color: #3c5269; }
 .measure-card-body strong { color: #50708e; font-weight: 600; }
+.import-steps { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; font-size: 12px; color: #6b7f95; }.import-steps span { padding: 6px 10px; background: #eef3f8; border-radius: 14px; }.import-steps .active-step { background: #e8f2fc; color: #176fca; font-weight: 700; }.upload-zone { padding: 16px; border: 1px dashed #8fb8df; border-radius: 8px; background: #f6faff; }.upload-zone input { margin-bottom: 8px; }.upload-zone strong, .upload-zone span { color: #365875; font-weight: 500; }.import-mapping { margin-top: 20px; padding-top: 18px; border-top: 1px solid #e6edf4; }.import-mapping h3 { margin: 0; color: #203b58; font-size: 14px; }.import-mapping p { color: #70849a; font-size: 12px; }.import-mapping .primary-button { margin-top: 16px; }

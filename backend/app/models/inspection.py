@@ -31,7 +31,7 @@ class Inspection(Entity):
     __table_args__ = (UniqueConstraint("control_type_id", "document_number_normalized", name="uq_inspection_control_number"),)
 
     control_type_id: Mapped[UUID] = mapped_column(ForeignKey("control_types.id", ondelete="RESTRICT"), nullable=False, index=True)
-    inspection_kind_id: Mapped[UUID] = mapped_column(ForeignKey("inspection_kinds.id", ondelete="RESTRICT"), nullable=False)
+    inspection_kind_id: Mapped[UUID | None] = mapped_column(ForeignKey("inspection_kinds.id", ondelete="RESTRICT"))
     department_id: Mapped[UUID | None] = mapped_column(ForeignKey("departments.id", ondelete="RESTRICT"), index=True)
     object_id: Mapped[UUID | None] = mapped_column(ForeignKey("objects.id", ondelete="RESTRICT"), index=True)
     document_number: Mapped[str] = mapped_column(String(128), nullable=False)

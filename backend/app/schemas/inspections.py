@@ -9,7 +9,7 @@ from app.schemas.common import APIModel
 
 class InspectionCreate(BaseModel):
     control_type_id: UUID
-    inspection_kind_id: UUID
+    inspection_kind_id: UUID | None = None
     department_id: UUID | None = None
     object_id: UUID | None = None
     document_number: str = Field(min_length=1, max_length=128)
@@ -47,6 +47,22 @@ class InspectionResponse(APIModel):
     updated_at: datetime
 
 
+class ImportPreviewRow(APIModel):
+    row_number: int
+    values: dict[str, str]
+    due_date: date | None
+    errors: list[str]
+
+
+class ImportPreviewResponse(APIModel):
+    file_name: str
+    headers: list[str]
+    mapping: dict[str, str]
+    rows: list[ImportPreviewRow]
+    valid_rows: int
+    invalid_rows: int
+
+
 class ViolationMeasureInput(BaseModel):
     department_id: UUID
     object_id: UUID
@@ -78,6 +94,23 @@ class ViolationMeasureResponse(APIModel):
     status: ViolationStatus
     created_at: datetime
     updated_at: datetime
+
+
+class ImportConfirmRow(BaseModel):
+    formulation: str = Field(min_length=1)
+    violated_requirement: str = Field(min_length=1)
+    violation_type_id: UUID
+    document_received_date: date | None = None
+    measures: list[ViolationMeasureInput] = Field(min_length=1)
+
+
+class ImportConfirm(BaseModel):
+    rows: list[ImportConfirmRow] = Field(min_length=1)
+
+
+class ImportConfirmResponse(APIModel):
+    created_violations: int
+    created_measures: int
 
 
 class ViolationCreate(BaseModel):

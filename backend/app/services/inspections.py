@@ -78,19 +78,27 @@ def ensure_unique_document_number(database: Session, control_type_id: UUID, norm
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Проверка с таким номером уже существует для выбранного вида контроля")
 
 
-def validate_inspection_references(database: Session, control_type_id: UUID, inspection_kind_id: UUID) -> ControlType:
+def validate_inspection_references(database: Session, control_type_id: UUID, inspection_kind_id: UUID | None) -> ControlType:
     control_type = require_active(database, ControlType, control_type_id, "вид контроля")
-    require_active(database, InspectionKind, inspection_kind_id, "вид проверки")
+    without_kind = {"PC_II", "ROSTECHNADZOR", "GAZNADZOR"}
+    if control_type.code in without_kind:
+        if inspection_kind_id is not None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Для выбранного вида контроля вид проверки не указывается")
+    elif inspection_kind_id is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Укажите вид проверки")
+    else:
+        require_active(database, InspectionKind, inspection_kind_id, "вид проверки")
     return control_type
 
 
-def validate_inspection_location(database: Session, inspection_kind_id: UUID, department_id: UUID | None, object_id: UUID | None) -> None:
-    inspection_kind = require_active(database, InspectionKind, inspection_kind_id, "вид проверки")
-    requires_location = inspection_kind.code in {"PLANNED", "UNSCHEDULED"}
+def validate_inspection_location(database: Session, control_type_id: UUID, inspection_kind_id: UUID | None, department_id: UUID | None, object_id: UUID | None) -> None:
+    control_type = require_active(database, ControlType, control_type_id, "вид контроля")
+    inspection_kind = require_active(database, InspectionKind, inspection_kind_id, "вид проверки") if inspection_kind_id else None
+    requires_location = inspection_kind is not None and inspection_kind.code in {"PLANNED", "UNSCHEDULED"} and control_type.code == "PC_III"
     if requires_location and (department_id is None or object_id is None):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Для плановой и внеплановой проверки укажите подразделение и объект")
     if not requires_location and (department_id is not None or object_id is not None):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Подразделение и объект указываются только для плановой и внеплановой проверки")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Подразделение и объект не указываются для целевых проверок, Ростехнадзора и Газнадзора")
     if department_id is None or object_id is None:
         return
     department = require_active(database, Department, department_id, "подразделение проверки")
