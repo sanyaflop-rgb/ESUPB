@@ -32,6 +32,8 @@ class Inspection(Entity):
 
     control_type_id: Mapped[UUID] = mapped_column(ForeignKey("control_types.id", ondelete="RESTRICT"), nullable=False, index=True)
     inspection_kind_id: Mapped[UUID] = mapped_column(ForeignKey("inspection_kinds.id", ondelete="RESTRICT"), nullable=False)
+    department_id: Mapped[UUID | None] = mapped_column(ForeignKey("departments.id", ondelete="RESTRICT"), index=True)
+    object_id: Mapped[UUID | None] = mapped_column(ForeignKey("objects.id", ondelete="RESTRICT"), index=True)
     document_number: Mapped[str] = mapped_column(String(128), nullable=False)
     document_number_normalized: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     inspection_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
@@ -41,33 +43,15 @@ class Inspection(Entity):
     updated_by_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
 
 
-class InspectionScope(Entity):
-    __tablename__ = "inspection_scopes"
-
-    inspection_id: Mapped[UUID] = mapped_column(ForeignKey("inspections.id", ondelete="RESTRICT"), nullable=False, index=True)
-    department_id: Mapped[UUID] = mapped_column(ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False)
-    object_id: Mapped[UUID] = mapped_column(ForeignKey("objects.id", ondelete="RESTRICT"), nullable=False)
-    comment: Mapped[str | None] = mapped_column(Text)
-
-
 class Violation(Entity):
     __tablename__ = "violations"
 
     inspection_id: Mapped[UUID] = mapped_column(ForeignKey("inspections.id", ondelete="RESTRICT"), nullable=False, index=True)
-    inspection_scope_id: Mapped[UUID] = mapped_column(ForeignKey("inspection_scopes.id", ondelete="RESTRICT"), nullable=False, index=True)
     formulation: Mapped[str] = mapped_column(Text, nullable=False)
     violated_requirement: Mapped[str] = mapped_column(Text, nullable=False)
     violation_type_id: Mapped[UUID] = mapped_column(ForeignKey("violation_types.id", ondelete="RESTRICT"), nullable=False)
     severity: Mapped[int] = mapped_column(Integer, nullable=False)
-    due_date: Mapped[date | None] = mapped_column(Date, index=True)
-    original_due_date: Mapped[date | None] = mapped_column(Date)
-    due_date_basis: Mapped[str | None] = mapped_column(String(255))
-    due_date_source_text: Mapped[str | None] = mapped_column(Text)
     document_received_date: Mapped[date | None] = mapped_column(Date)
-    elimination_date: Mapped[date | None] = mapped_column(Date, index=True)
-    eliminated_during_inspection: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    eliminated_late: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    days_overdue_at_elimination: Mapped[int | None] = mapped_column(Integer)
     annulled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     annulled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     annulled_by_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
@@ -76,26 +60,29 @@ class Violation(Entity):
     updated_by_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
 
 
-class ViolationResponsibleDepartment(Entity):
-    __tablename__ = "violation_responsible_departments"
-    __table_args__ = (UniqueConstraint("violation_id", "department_id", name="uq_violation_responsible_department"),)
+class ViolationMeasure(Entity):
+    __tablename__ = "violation_measures"
+    __table_args__ = (
+        UniqueConstraint("violation_id", "department_id", "object_id", "person_id", name="uq_violation_measure_assignment"),
+    )
 
-    violation_id: Mapped[UUID] = mapped_column(ForeignKey("violations.id", ondelete="RESTRICT"), nullable=False)
-    department_id: Mapped[UUID] = mapped_column(ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False)
-
-
-class ViolationResponsiblePerson(Entity):
-    __tablename__ = "violation_responsible_persons"
-    __table_args__ = (UniqueConstraint("violation_id", "person_id", name="uq_violation_responsible_person"),)
-
-    violation_id: Mapped[UUID] = mapped_column(ForeignKey("violations.id", ondelete="RESTRICT"), nullable=False)
-    person_id: Mapped[UUID] = mapped_column(ForeignKey("persons.id", ondelete="RESTRICT"), nullable=False)
+    violation_id: Mapped[UUID] = mapped_column(ForeignKey("violations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    department_id: Mapped[UUID] = mapped_column(ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, index=True)
+    object_id: Mapped[UUID] = mapped_column(ForeignKey("objects.id", ondelete="RESTRICT"), nullable=False, index=True)
+    person_id: Mapped[UUID] = mapped_column(ForeignKey("persons.id", ondelete="RESTRICT"), nullable=False, index=True)
+    elimination_measure: Mapped[str] = mapped_column(Text, nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date, index=True)
+    original_due_date: Mapped[date | None] = mapped_column(Date)
+    elimination_date: Mapped[date | None] = mapped_column(Date, index=True)
+    eliminated_during_inspection: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    eliminated_late: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    days_overdue_at_elimination: Mapped[int | None] = mapped_column(Integer)
 
 
 class DeadlineChange(Entity):
     __tablename__ = "deadline_changes"
 
-    violation_id: Mapped[UUID] = mapped_column(ForeignKey("violations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    violation_measure_id: Mapped[UUID] = mapped_column(ForeignKey("violation_measures.id", ondelete="RESTRICT"), nullable=False, index=True)
     old_due_date: Mapped[date] = mapped_column(Date, nullable=False)
     new_due_date: Mapped[date] = mapped_column(Date, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
@@ -106,7 +93,7 @@ class DeadlineChange(Entity):
 class DeadlineChangeRequest(Entity):
     __tablename__ = "deadline_change_requests"
 
-    violation_id: Mapped[UUID] = mapped_column(ForeignKey("violations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    violation_measure_id: Mapped[UUID] = mapped_column(ForeignKey("violation_measures.id", ondelete="RESTRICT"), nullable=False, index=True)
     requested_due_date: Mapped[date] = mapped_column(Date, nullable=False)
     comment: Mapped[str] = mapped_column(Text, nullable=False)
     requested_by_id: Mapped[UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
