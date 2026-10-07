@@ -1,14 +1,19 @@
 export type CurrentUser = { id: string; login: string; display_name: string; roles: string[] }
 export type ReferenceItem = { id: string; code: string; name: string; is_active: boolean; display_order: number }
 export type UserItem = { id: string; login: string; display_name: string; is_active: boolean; roles: string[] }
-export type InspectionItem = { id: string; control_type_id: string; inspection_kind_id: string | null; department_id: string | null; object_id: string | null; document_number: string; inspection_date: string; state: 'draft' | 'editing' | 'in_progress'; comment: string | null }
+export type InspectionItem = { id: string; control_type_id: string; has_deadline_control: boolean; inspection_kind_id: string | null; department_id: string | null; object_id: string | null; document_number: string; inspection_date: string; state: 'draft' | 'editing' | 'in_progress'; comment: string | null }
 export type ObjectItem = { id: string; code: string; name: string; owner_department_id: string | null; is_active: boolean; display_order: number }
 export type PersonItem = { id: string; full_name: string; position: string | null; department_id: string | null; is_active: boolean; display_order: number }
 export type ViolationTypeItem = { id: string; code: string; name: string; severity: number; is_active: boolean }
 export type MeasureItem = { id: string; violation_id: string; department_id: string; object_id: string; person_id: string; elimination_measure: string; due_date: string | null; original_due_date: string | null; elimination_date: string | null; eliminated_during_inspection: boolean; eliminated_late: boolean; days_overdue_at_elimination: number | null; status: 'eliminated' | 'not_eliminated' | 'overdue' }
 export type MeasureInput = { department_id: string; object_id: string; person_id: string; elimination_measure: string; due_date?: string }
-export type ViolationItem = { id: string; inspection_id: string; formulation: string; violated_requirement: string; severity: number; document_received_date: string | null; annulled: boolean; status: 'eliminated' | 'not_eliminated' | 'overdue' | null; measures: MeasureItem[]; due_date?: string | null; elimination_date?: string | null }
-export type ImportPreviewRow = { row_number: number; values: Record<string, string>; due_date: string | null; errors: string[] }
+export type ViolationItem = { id: string; inspection_id: string; has_deadline_control: boolean; formulation: string; violated_requirement: string; severity: number; document_received_date: string | null; annulled: boolean; status: 'eliminated' | 'not_eliminated' | 'overdue' | null; measures: MeasureItem[]; due_date?: string | null; elimination_date?: string | null }
+export type DeadlineControlItem = { measure_id: string; violation_id: string; inspection_id: string; document_number: string; inspection_date: string; control_type_name: string; department_id: string; department_name: string; object_id: string; object_name: string; person_id: string; person_name: string; person_position: string | null; violation_formulation: string; elimination_measure: string; due_date: string | null; original_due_date: string | null; elimination_date: string | null; eliminated_during_inspection: boolean; eliminated_late: boolean; days_overdue_at_elimination: number | null; status: 'eliminated' | 'not_eliminated' | 'overdue'; days_overdue: number; days_left: number | null; due_soon: boolean }
+export type DeadlineControlSummary = { total: number; overdue: number; due_soon: number; not_eliminated: number; eliminated: number; eliminated_late: number }
+export type DeadlineControlResponse = { summary: DeadlineControlSummary; items: DeadlineControlItem[] }
+export type DeadlineChangeItem = { id: string; violation_measure_id: string; old_due_date: string; new_due_date: string; reason: string; changed_by_id: string; changed_at: string }
+export type ImportResponsible = { raw: string; name: string | null; position: string | null; person_id: string | null; person_name: string | null }
+export type ImportPreviewRow = { row_number: number; values: Record<string, string>; due_date: string | null; responsible: ImportResponsible | null; errors: string[] }
 export type ImportPreview = { file_name: string; headers: string[]; mapping: Record<string, string>; rows: ImportPreviewRow[]; valid_rows: number; invalid_rows: number }
 
 export class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
@@ -36,5 +41,7 @@ export const api = {
   confirmImport: (token: string, inspectionId: string, payload: { rows: Array<{ formulation: string; violated_requirement: string; violation_type_id: string; measures: MeasureInput[] }> }) => request<{ created_violations: number; created_measures: number }>(`/inspections/${inspectionId}/imports/confirm`, token, { method: 'POST', body: JSON.stringify(payload) }),
   violations: (token: string) => request<ViolationItem[]>('/violations', token),
   eliminateMeasure: (token: string, measureId: string, payload: { elimination_date: string; eliminated_during_inspection?: boolean }) => request<MeasureItem>(`/measures/${measureId}/elimination`, token, { method: 'POST', body: JSON.stringify(payload) }),
-  changeMeasureDeadline: (token: string, measureId: string, payload: { new_due_date: string; reason: string }) => request(`/measures/${measureId}/deadline-changes`, token, { method: 'POST', body: JSON.stringify(payload) }),
+  changeMeasureDeadline: (token: string, measureId: string, payload: { new_due_date: string; reason: string }) => request<DeadlineChangeItem>(`/measures/${measureId}/deadline-changes`, token, { method: 'POST', body: JSON.stringify(payload) }),
+  deadlineChanges: (token: string, measureId: string) => request<DeadlineChangeItem[]>(`/measures/${measureId}/deadline-changes`, token),
+  deadlineControl: (token: string, params: { status?: string; department_id?: string; person_id?: string }) => { const query = new URLSearchParams(); if (params.status) query.set('status', params.status); if (params.department_id) query.set('department_id', params.department_id); if (params.person_id) query.set('person_id', params.person_id); const suffix = query.toString(); return request<DeadlineControlResponse>(`/deadline-control${suffix ? `?${suffix}` : ''}`, token) },
 }

@@ -33,7 +33,8 @@ class InspectionStateChange(BaseModel):
 class InspectionResponse(APIModel):
     id: UUID
     control_type_id: UUID
-    inspection_kind_id: UUID
+    has_deadline_control: bool
+    inspection_kind_id: UUID | None
     department_id: UUID | None
     object_id: UUID | None
     document_number: str
@@ -47,10 +48,19 @@ class InspectionResponse(APIModel):
     updated_at: datetime
 
 
+class ImportResponsible(APIModel):
+    raw: str
+    name: str | None = None
+    position: str | None = None
+    person_id: UUID | None = None
+    person_name: str | None = None
+
+
 class ImportPreviewRow(APIModel):
     row_number: int
     values: dict[str, str]
     due_date: date | None
+    responsible: ImportResponsible | None = None
     errors: list[str]
 
 
@@ -171,6 +181,7 @@ class RepeatLinkResponse(APIModel):
 class ViolationResponse(APIModel):
     id: UUID
     inspection_id: UUID
+    has_deadline_control: bool
     formulation: str
     violated_requirement: str
     violation_type_id: UUID
@@ -186,3 +197,45 @@ class ViolationResponse(APIModel):
     updated_by_id: UUID
     created_at: datetime
     updated_at: datetime
+
+
+class DeadlineControlItem(APIModel):
+    measure_id: UUID
+    violation_id: UUID
+    inspection_id: UUID
+    document_number: str
+    inspection_date: date
+    control_type_name: str
+    department_id: UUID
+    department_name: str
+    object_id: UUID
+    object_name: str
+    person_id: UUID
+    person_name: str
+    person_position: str | None
+    violation_formulation: str
+    elimination_measure: str
+    due_date: date | None
+    original_due_date: date | None
+    elimination_date: date | None
+    eliminated_during_inspection: bool
+    eliminated_late: bool
+    days_overdue_at_elimination: int | None
+    status: ViolationStatus
+    days_overdue: int
+    days_left: int | None
+    due_soon: bool
+
+
+class DeadlineControlSummary(APIModel):
+    total: int
+    overdue: int
+    due_soon: int
+    not_eliminated: int
+    eliminated: int
+    eliminated_late: int
+
+
+class DeadlineControlResponse(APIModel):
+    summary: DeadlineControlSummary
+    items: list[DeadlineControlItem]

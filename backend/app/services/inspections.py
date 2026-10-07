@@ -23,6 +23,7 @@ from app.models.reference import (
 )
 
 _DEADLINE_FIELDS = ("due_date", "document_received_date")
+DUE_SOON_DAYS = 7
 
 
 def normalize_document_number(value: str) -> str:
@@ -185,6 +186,25 @@ def recalculate_elimination_flags(measure: ViolationMeasure) -> None:
     overdue_days = (measure.elimination_date - measure.due_date).days
     measure.eliminated_late = overdue_days > 0
     measure.days_overdue_at_elimination = max(0, overdue_days)
+
+
+def days_overdue(measure: ViolationMeasure, today: date | None = None) -> int:
+    current_date = today or datetime.now(UTC).date()
+    if measure.due_date is None or measure.elimination_date is not None:
+        return 0
+    return max(0, (current_date - measure.due_date).days)
+
+
+def days_left(measure: ViolationMeasure, today: date | None = None) -> int | None:
+    if measure.due_date is None or measure.elimination_date is not None:
+        return None
+    current_date = today or datetime.now(UTC).date()
+    return (measure.due_date - current_date).days
+
+
+def is_due_soon(measure: ViolationMeasure, today: date | None = None) -> bool:
+    remaining = days_left(measure, today)
+    return remaining is not None and 0 <= remaining <= DUE_SOON_DAYS
 
 
 def validate_state_transition(current: InspectionState | str, target: InspectionState) -> None:

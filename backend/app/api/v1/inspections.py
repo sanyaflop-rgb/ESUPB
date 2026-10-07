@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -15,12 +16,17 @@ from app.models.inspection import (
     RepeatLink,
     Violation,
     ViolationMeasure,
+    ViolationStatus,
 )
+from app.models.reference import ControlType, Department, Person, ProductionObject
 from app.models.security import User
 from app.schemas.inspections import (
     AnnulmentCreate,
     DeadlineChangeCreate,
     DeadlineChangeResponse,
+    DeadlineControlItem,
+    DeadlineControlResponse,
+    DeadlineControlSummary,
     EliminationCreate,
     ImportConfirm,
     ImportConfirmResponse,
@@ -39,10 +45,13 @@ from app.schemas.inspections import (
     ViolationUpdate,
 )
 from app.services.audit import record_audit
-from app.services.imports import parse_import_file, preview_rows
+from app.services.imports import parse_import_file, preview_rows, resolve_responsibles
 from app.services.inspections import (
+    DUE_SOON_DAYS,
     calculate_measure_status,
     calculate_violation_status,
+    days_left,
+    days_overdue,
     ensure_deadline_control,
     ensure_inspection_editable,
     ensure_not_annulled,
@@ -51,6 +60,7 @@ from app.services.inspections import (
     get_inspection,
     get_measure,
     get_violation,
+    is_due_soon,
     normalize_document_number,
     recalculate_elimination_flags,
     utc_now,
@@ -79,6 +89,27 @@ def inspection_snapshot(item: Inspection) -> dict[str, Any]:
     }
 
 
+def serialize_inspection(database: Session, item: Inspection) -> InspectionResponse:
+    control_type = database.get(ControlType, item.control_type_id)
+    return InspectionResponse(
+        id=item.id,
+        control_type_id=item.control_type_id,
+        has_deadline_control=control_type.has_deadline_control if control_type is not None else True,
+        inspection_kind_id=item.inspection_kind_id,
+        department_id=item.department_id,
+        object_id=item.object_id,
+        document_number=item.document_number,
+        document_number_normalized=item.document_number_normalized,
+        inspection_date=item.inspection_date,
+        state=item.state,
+        comment=item.comment,
+        created_by_id=item.created_by_id,
+        updated_by_id=item.updated_by_id,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
 def measures_for(database: Session, violation_id: UUID) -> list[ViolationMeasure]:
     return list(database.scalars(select(ViolationMeasure).where(ViolationMeasure.violation_id == violation_id).order_by(ViolationMeasure.created_at)))
 
@@ -105,9 +136,11 @@ def serialize_measure(item: ViolationMeasure) -> ViolationMeasureResponse:
 
 def serialize_violation(database: Session, item: Violation) -> ViolationResponse:
     measures = measures_for(database, item.id)
+    control_type = get_control_type(database, get_inspection(database, item.inspection_id))
     return ViolationResponse(
         id=item.id,
         inspection_id=item.inspection_id,
+        has_deadline_control=control_type.has_deadline_control,
         formulation=item.formulation,
         violated_requirement=item.violated_requirement,
         violation_type_id=item.violation_type_id,
@@ -151,6 +184,16 @@ def violation_snapshot(database: Session, item: Violation) -> dict[str, Any]:
     }
 
 
+def deadline_control_rank(item: DeadlineControlItem) -> int:
+    if item.status == ViolationStatus.OVERDUE:
+        return 0
+    if item.days_left is not None and 0 <= item.days_left <= DUE_SOON_DAYS:
+        return 1
+    if item.status == ViolationStatus.NOT_ELIMINATED:
+        return 2
+    return 3
+
+
 def add_measures(database: Session, violation: Violation, values: list[dict[str, object]]) -> list[ViolationMeasure]:
     items: list[ViolationMeasure] = []
     for value in values:
@@ -170,12 +213,13 @@ def add_measures(database: Session, violation: Violation, values: list[dict[str,
 
 
 @router.get("/inspections", response_model=list[InspectionResponse])
-def list_inspections(_: User = Depends(get_current_user), database: Session = Depends(get_db)) -> list[Inspection]:
-    return list(database.scalars(select(Inspection).order_by(Inspection.inspection_date.desc(), Inspection.document_number)))
+def list_inspections(_: User = Depends(get_current_user), database: Session = Depends(get_db)) -> list[InspectionResponse]:
+    items = database.scalars(select(Inspection).order_by(Inspection.inspection_date.desc(), Inspection.document_number))
+    return [serialize_inspection(database, item) for item in items]
 
 
 @router.post("/inspections", response_model=InspectionResponse, status_code=status.HTTP_201_CREATED)
-def create_inspection(payload: InspectionCreate, writer: User = RequireWriter, database: Session = Depends(get_db)) -> Inspection:
+def create_inspection(payload: InspectionCreate, writer: User = RequireWriter, database: Session = Depends(get_db)) -> InspectionResponse:
     validate_inspection_references(database, payload.control_type_id, payload.inspection_kind_id)
     validate_inspection_location(database, payload.control_type_id, payload.inspection_kind_id, payload.department_id, payload.object_id)
     normalized_number = normalize_document_number(payload.document_number)
@@ -201,16 +245,16 @@ def create_inspection(payload: InspectionCreate, writer: User = RequireWriter, d
         database.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Проверка с таким номером уже существует") from error
     database.refresh(item)
-    return item
+    return serialize_inspection(database, item)
 
 
 @router.get("/inspections/{inspection_id}", response_model=InspectionResponse)
-def read_inspection(inspection_id: UUID, _: User = Depends(get_current_user), database: Session = Depends(get_db)) -> Inspection:
-    return get_inspection(database, inspection_id)
+def read_inspection(inspection_id: UUID, _: User = Depends(get_current_user), database: Session = Depends(get_db)) -> InspectionResponse:
+    return serialize_inspection(database, get_inspection(database, inspection_id))
 
 
 @router.patch("/inspections/{inspection_id}", response_model=InspectionResponse)
-def update_inspection(inspection_id: UUID, payload: InspectionUpdate, writer: User = RequireWriter, database: Session = Depends(get_db)) -> Inspection:
+def update_inspection(inspection_id: UUID, payload: InspectionUpdate, writer: User = RequireWriter, database: Session = Depends(get_db)) -> InspectionResponse:
     item = get_inspection(database, inspection_id)
     ensure_inspection_editable(item)
     old_value = inspection_snapshot(item)
@@ -238,11 +282,11 @@ def update_inspection(inspection_id: UUID, payload: InspectionUpdate, writer: Us
     record_audit(database, actor_id=writer.id, entity_type="inspections", entity_id=item.id, action="update", old_value=old_value, new_value=inspection_snapshot(item))
     database.commit()
     database.refresh(item)
-    return item
+    return serialize_inspection(database, item)
 
 
 @router.post("/inspections/{inspection_id}/state", response_model=InspectionResponse)
-def change_inspection_state(inspection_id: UUID, payload: InspectionStateChange, writer: User = RequireWriter, database: Session = Depends(get_db)) -> Inspection:
+def change_inspection_state(inspection_id: UUID, payload: InspectionStateChange, writer: User = RequireWriter, database: Session = Depends(get_db)) -> InspectionResponse:
     item = get_inspection(database, inspection_id)
     validate_state_transition(item.state, payload.state)
     old_value = inspection_snapshot(item)
@@ -251,7 +295,7 @@ def change_inspection_state(inspection_id: UUID, payload: InspectionStateChange,
     record_audit(database, actor_id=writer.id, entity_type="inspections", entity_id=item.id, action="change_state", old_value=old_value, new_value=inspection_snapshot(item))
     database.commit()
     database.refresh(item)
-    return item
+    return serialize_inspection(database, item)
 
 
 @router.post("/inspections/{inspection_id}/imports/confirm", response_model=ImportConfirmResponse, status_code=status.HTTP_201_CREATED)
@@ -309,6 +353,8 @@ async def preview_import(
     content = await file.read()
     headers, rows = parse_import_file(file.filename or "импорт", content, header_row)
     resolved_mapping, preview = preview_rows(headers, rows, field_mapping)
+    persons = [(person.id, person.full_name) for person in database.scalars(select(Person).where(Person.is_active.is_(True)).order_by(Person.display_order))]
+    resolve_responsibles(preview, resolved_mapping, persons)
     return ImportPreviewResponse(
         file_name=file.filename or "импорт",
         headers=headers,
@@ -380,6 +426,88 @@ def list_violations(
     if not include_annulled:
         statement = statement.where(Violation.annulled.is_(False))
     return [serialize_violation(database, item) for item in database.scalars(statement)]
+
+
+DEADLINE_STATUS_FILTERS = ("overdue", "due_soon", "not_eliminated", "eliminated", "eliminated_late")
+
+
+@router.get("/deadline-control", response_model=DeadlineControlResponse)
+def deadline_control(
+    status_filter: str | None = Query(default=None, alias="status"),
+    department_id: UUID | None = Query(default=None),
+    person_id: UUID | None = Query(default=None),
+    _: User = Depends(get_current_user),
+    database: Session = Depends(get_db),
+) -> DeadlineControlResponse:
+    if status_filter is not None and status_filter not in DEADLINE_STATUS_FILTERS:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Неизвестный фильтр статуса")
+    statement = (
+        select(ViolationMeasure, Violation, Inspection, ControlType, Department, ProductionObject, Person)
+        .join(Violation, ViolationMeasure.violation_id == Violation.id)
+        .join(Inspection, Violation.inspection_id == Inspection.id)
+        .join(ControlType, Inspection.control_type_id == ControlType.id)
+        .join(Department, ViolationMeasure.department_id == Department.id)
+        .join(ProductionObject, ViolationMeasure.object_id == ProductionObject.id)
+        .join(Person, ViolationMeasure.person_id == Person.id)
+        .where(Violation.annulled.is_(False), ControlType.has_deadline_control.is_(True))
+    )
+    if department_id is not None:
+        statement = statement.where(ViolationMeasure.department_id == department_id)
+    if person_id is not None:
+        statement = statement.where(ViolationMeasure.person_id == person_id)
+    today = datetime.now(UTC).date()
+    entries: list[tuple[DeadlineControlItem, bool]] = []
+    for measure, violation, inspection, control_type, department, production_object, person in database.execute(statement):
+        entries.append((
+            DeadlineControlItem(
+                measure_id=measure.id,
+                violation_id=violation.id,
+                inspection_id=inspection.id,
+                document_number=inspection.document_number,
+                inspection_date=inspection.inspection_date,
+                control_type_name=control_type.name,
+                department_id=department.id,
+                department_name=department.name,
+                object_id=production_object.id,
+                object_name=production_object.name,
+                person_id=person.id,
+                person_name=person.full_name,
+                person_position=person.position,
+                violation_formulation=violation.formulation,
+                elimination_measure=measure.elimination_measure,
+                due_date=measure.due_date,
+                original_due_date=measure.original_due_date,
+                elimination_date=measure.elimination_date,
+                eliminated_during_inspection=measure.eliminated_during_inspection,
+                eliminated_late=measure.eliminated_late,
+                days_overdue_at_elimination=measure.days_overdue_at_elimination,
+                status=calculate_measure_status(measure, today),
+                days_overdue=days_overdue(measure, today),
+                days_left=days_left(measure, today),
+                due_soon=is_due_soon(measure, today),
+            ),
+            is_due_soon(measure, today),
+        ))
+    summary = DeadlineControlSummary(
+        total=len(entries),
+        overdue=sum(1 for item, _ in entries if item.status == ViolationStatus.OVERDUE),
+        due_soon=sum(1 for _, soon in entries if soon),
+        not_eliminated=sum(1 for item, _ in entries if item.status == ViolationStatus.NOT_ELIMINATED),
+        eliminated=sum(1 for item, _ in entries if item.status == ViolationStatus.ELIMINATED),
+        eliminated_late=sum(1 for item, _ in entries if item.eliminated_late),
+    )
+    if status_filter == "overdue":
+        entries = [entry for entry in entries if entry[0].status == ViolationStatus.OVERDUE]
+    elif status_filter == "due_soon":
+        entries = [entry for entry in entries if entry[1]]
+    elif status_filter == "not_eliminated":
+        entries = [entry for entry in entries if entry[0].status == ViolationStatus.NOT_ELIMINATED]
+    elif status_filter == "eliminated":
+        entries = [entry for entry in entries if entry[0].status == ViolationStatus.ELIMINATED]
+    elif status_filter == "eliminated_late":
+        entries = [entry for entry in entries if entry[0].eliminated_late]
+    items = sorted((item for item, _ in entries), key=lambda item: (deadline_control_rank(item), item.due_date or date.max, item.person_name))
+    return DeadlineControlResponse(summary=summary, items=items)
 
 
 @router.get("/violations/{violation_id}", response_model=ViolationResponse)

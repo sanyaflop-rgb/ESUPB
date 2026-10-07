@@ -8,6 +8,9 @@ from app.models.reference import ControlType
 from app.services.inspections import (
     calculate_measure_status,
     calculate_violation_status,
+    days_left,
+    days_overdue,
+    is_due_soon,
     normalize_document_number,
     recalculate_elimination_flags,
     validate_deadline_fields,
@@ -57,3 +60,31 @@ def test_pc_ii_rejects_measure_deadline_data() -> None:
     with pytest.raises(HTTPException):
         validate_deadline_fields(control_type, {"measures": [{"due_date": date(2026, 10, 8)}]})
     validate_deadline_fields(control_type, {"document_received_date": None, "measures": [{"due_date": None}]})
+
+
+def test_days_overdue_and_days_left_are_calendar_based() -> None:
+    measure = ViolationMeasure(due_date=date(2026, 10, 10))
+    assert days_overdue(measure, today=date(2026, 10, 5)) == 0
+    assert days_left(measure, today=date(2026, 10, 5)) == 5
+    assert days_overdue(measure, today=date(2026, 10, 13)) == 3
+    assert days_left(measure, today=date(2026, 10, 13)) == -3
+
+
+def test_counters_freeze_without_due_date_or_after_elimination() -> None:
+    no_due = ViolationMeasure(due_date=None)
+    assert days_overdue(no_due, today=date(2026, 10, 5)) == 0
+    assert days_left(no_due, today=date(2026, 10, 5)) is None
+    eliminated = ViolationMeasure(due_date=date(2026, 10, 4), elimination_date=date(2026, 10, 6))
+    assert days_overdue(eliminated, today=date(2026, 10, 10)) == 0
+    assert days_left(eliminated, today=date(2026, 10, 10)) is None
+
+
+def test_due_soon_window_is_seven_calendar_days() -> None:
+    measure = ViolationMeasure(due_date=date(2026, 10, 12))
+    assert is_due_soon(measure, today=date(2026, 10, 5)) is True
+    assert is_due_soon(measure, today=date(2026, 10, 12)) is True
+    assert is_due_soon(measure, today=date(2026, 10, 4)) is False
+    assert is_due_soon(measure, today=date(2026, 10, 13)) is False
+    eliminated = ViolationMeasure(due_date=date(2026, 10, 12), elimination_date=date(2026, 10, 6))
+    assert is_due_soon(eliminated, today=date(2026, 10, 5)) is False
+    assert is_due_soon(ViolationMeasure(due_date=None), today=date(2026, 10, 5)) is False

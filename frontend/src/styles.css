@@ -17,3 +17,38 @@
 .measure-card-body { display: grid; gap: 5px; font-size: 13px; color: #3c5269; }
 .measure-card-body strong { color: #50708e; font-weight: 600; }
 .import-steps { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; font-size: 12px; color: #6b7f95; }.import-steps span { padding: 6px 10px; background: #eef3f8; border-radius: 14px; }.import-steps .active-step { background: #e8f2fc; color: #176fca; font-weight: 700; }.upload-zone { padding: 16px; border: 1px dashed #8fb8df; border-radius: 8px; background: #f6faff; }.upload-zone input { margin-bottom: 8px; }.upload-zone strong, .upload-zone span { color: #365875; font-weight: 500; }.import-mapping { margin-top: 20px; padding-top: 18px; border-top: 1px solid #e6edf4; }.import-mapping h3 { margin: 0; color: #203b58; font-size: 14px; }.import-mapping p { color: #70849a; font-size: 12px; }.import-mapping .primary-button { margin-top: 16px; }
+.responsible-cell { min-width: 240px; }
+.responsible-cell .chip { margin-bottom: 6px; }
+.responsible-cell select { width: 100%; border: 1px solid #cbd8e5; border-radius: 6px; padding: 7px 8px; color: #213b58; background: #fff; font-size: 12px; }
+.form-success { padding: 18px; margin: 0; font-size: 13px; color: #137755; background: #ddf5eb; border-radius: 5px; }
+.chip.warning { color: #95600f; background: #fff4dd; }
+.cell-note { display: block; margin-top: 3px; color: #8496a9; font-size: 11px; font-weight: 400; }
+.danger-note { color: #b32929; }
+.soon-note { color: #95600f; }
+.deadline-filters { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.deadline-filters label { display: grid; gap: 6px; min-width: 240px; color: #405972; font-size: 12px; font-weight: 600; }
+.deadline-filters select { width: 100%; border: 1px solid #cbd8e5; border-radius: 6px; padding: 9px; color: #213b58; background: #fff; }
+.measure-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.measure-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.small-button { font-size: 12px; padding: 7px 10px; }
+.inline-action-form { display: grid; grid-template-columns: repeat(2, minmax(170px, 1fr)); gap: 12px; margin-top: 12px; padding: 14px; background: #fff; border: 1px solid #dbe6f0; border-radius: 8px; }
+.inline-action-form label { display: grid; gap: 6px; color: #405972; font-size: 12px; font-weight: 600; }
+.inline-action-form input, .inline-action-form textarea { width: 100%; border: 1px solid #cbd8e5; border-radius: 6px; padding: 9px; color: #213b58; background: #fff; }
+.inline-action-form textarea { min-height: 64px; resize: vertical; }
+.inline-action-form .wide { grid-column: 1 / -1; }
+.inline-action-form .measure-actions { margin-top: 0; }
+label.checkbox-label { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+label.checkbox-label input { width: auto; }
+.deadline-history { margin-top: 12px; padding: 12px 14px; background: #fff; border: 1px solid #dbe6f0; border-radius: 8px; }
+.deadline-history ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.deadline-history li { display: grid; gap: 3px; padding-bottom: 10px; border-bottom: 1px solid #e9eff5; font-size: 13px; color: #2b425a; }
+.deadline-history li:last-child { padding-bottom: 0; border-bottom: 0; }
+.deadline-history strong { color: #1e3550; }
+.deadline-history small { color: #8496a9; font-size: 11px; }
+.measures-block { display: grid; gap: 12px; }
+.measures-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.measures-header h3 { margin: 0; font-size: 14px; color: #203b58; }
+.measure-form { display: grid; grid-template-columns: repeat(2, minmax(180px, 1fr)); gap: 14px; padding: 14px 16px; background: #f5f8fb; border: 1px solid #e3ebf3; border-radius: 8px; }
+.measure-form > strong { grid-column: 1 / -1; font-size: 13px; color: #1e3550; }
+.measure-form .logout { justify-self: start; }
+@media (max-width: 680px) { .inline-action-form, .measure-form { grid-template-columns: 1fr; } .deadline-filters label { min-width: 0; } .measures-header { align-items: flex-start; flex-direction: column; } }
