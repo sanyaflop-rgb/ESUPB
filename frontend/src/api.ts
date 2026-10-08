@@ -16,12 +16,24 @@ export type DeadlineChangeItem = { id: string; violation_measure_id: string; old
 export type ImportResponsible = { raw: string; name: string | null; position: string | null; person_id: string | null; person_name: string | null }
 export type ImportPreviewRow = { row_number: number; values: Record<string, string>; due_date: string | null; responsible: ImportResponsible | null; errors: string[] }
 export type ImportPreview = { file_name: string; headers: string[]; mapping: Record<string, string>; rows: ImportPreviewRow[]; valid_rows: number; invalid_rows: number }
+export type AnalyticsSummary = { total: number; eliminated: number; not_eliminated: number; overdue: number; due_soon: number; eliminated_late: number; heavy: number }
+export type AnalyticsControlTypeItem = { control_type_id: string; code: string; name: string; total: number; eliminated: number; not_eliminated: number; overdue: number; heavy: number }
+export type AnalyticsSeverityItem = { severity: number; total: number }
+export type AnalyticsDepartmentItem = { department_id: string; name: string; total: number; eliminated: number; not_eliminated: number; overdue: number; heavy: number }
+export type AnalyticsObjectItem = { object_id: string; name: string; total: number; heavy: number }
+export type AnalyticsDynamicsPoint = { month: string; total: number; by_control_type: Record<string, number> }
+export type AnalyticsViolationTypeItem = { violation_type_id: string; code: string; name: string; severity: number; total: number }
+export type AnalyticsResponse = { period_from: string | null; period_to: string | null; summary: AnalyticsSummary; by_control_type: AnalyticsControlTypeItem[]; by_severity: AnalyticsSeverityItem[]; by_department: AnalyticsDepartmentItem[]; by_object: AnalyticsObjectItem[]; dynamics: AnalyticsDynamicsPoint[]; by_violation_type: AnalyticsViolationTypeItem[] }
+export type AnalyticsFilterParams = { date_from?: string; date_to?: string; control_type_id?: string; department_id?: string; object_id?: string; severity?: string; status?: string }
 
 export class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
 
+let unauthorizedHandler: (() => void) | null = null
+export function setUnauthorizedHandler(handler: (() => void) | null) { unauthorizedHandler = handler }
+
 async function request<T>(path: string, token: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api/v1${path}`, { ...options, headers: { Accept: 'application/json', ...(options?.body && !(options.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options?.headers } })
-  if (!response.ok) { const body = await response.json().catch(() => null) as { detail?: string } | null; throw new ApiError(body?.detail ?? 'Не удалось выполнить запрос', response.status) }
+  if (!response.ok) { const body = await response.json().catch(() => null) as { detail?: string } | null; if (response.status === 401 && token) unauthorizedHandler?.(); throw new ApiError(body?.detail ?? 'Не удалось выполнить запрос', response.status) }
   return response.json() as Promise<T>
 }
 
@@ -45,4 +57,5 @@ export const api = {
   changeMeasureDeadline: (token: string, measureId: string, payload: { new_due_date: string; reason: string }) => request<DeadlineChangeItem>(`/measures/${measureId}/deadline-changes`, token, { method: 'POST', body: JSON.stringify(payload) }),
   deadlineChanges: (token: string, measureId: string) => request<DeadlineChangeItem[]>(`/measures/${measureId}/deadline-changes`, token),
   deadlineControl: (token: string, params: { status?: string; department_id?: string; person_id?: string }) => { const query = new URLSearchParams(); if (params.status) query.set('status', params.status); if (params.department_id) query.set('department_id', params.department_id); if (params.person_id) query.set('person_id', params.person_id); const suffix = query.toString(); return request<DeadlineControlResponse>(`/deadline-control${suffix ? `?${suffix}` : ''}`, token) },
+  analytics: (token: string, params: AnalyticsFilterParams) => { const query = new URLSearchParams(); for (const [key, value] of Object.entries(params)) if (value) query.set(key, value); const suffix = query.toString(); return request<AnalyticsResponse>(`/analytics/summary${suffix ? `?${suffix}` : ''}`, token) },
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { api, ApiError, login as loginRequest, type CurrentUser, type DeadlineChangeItem, type DeadlineControlItem, type DeadlineControlResponse, type ImportPreviewRow, type InspectionItem, type MeasureInput, type MeasureItem, type ObjectItem, type PersonItem, type ReferenceItem, type UserItem, type ViolationItem, type ViolationTypeItem } from './api'
+import { api, ApiError, login as loginRequest, setUnauthorizedHandler, type AnalyticsFilterParams, type AnalyticsResponse, type AnalyticsSummary, type CurrentUser, type DeadlineChangeItem, type DeadlineControlItem, type DeadlineControlResponse, type ImportPreviewRow, type InspectionItem, type MeasureInput, type MeasureItem, type ObjectItem, type PersonItem, type ReferenceItem, type UserItem, type ViolationItem, type ViolationTypeItem } from './api'
 
 const blankMeasure = (): MeasureInput => ({ department_id: '', object_id: '', person_id: '', elimination_measure: '', due_date: '' })
 
@@ -10,11 +10,11 @@ const referenceTabs = [
   { resource: 'violation-groups', label: 'Группы нарушений' },
 ]
 
-const navigation = ['Дашборд', 'Проверки', 'Нарушения', 'Импорт', 'Контроль сроков', 'Аналитика', 'Оценка эффективности ПК', 'Отчёты и экспорт', 'Справочники', 'Пользователи и роли', 'История изменений']
+const navigation = ['Дашборд', 'Проверки', 'Нарушения', 'Импорт', 'Контроль сроков', 'Оценка эффективности ПК', 'Отчёты и экспорт', 'Справочники', 'Пользователи и роли', 'История изменений']
 
 type View = 'dashboard' | 'inspections' | 'violations' | 'imports' | 'deadlines' | 'references' | 'users'
 
-function LoginScreen({ onLogin }: { onLogin: (token: string, user: CurrentUser) => void }) {
+function LoginScreen({ onLogin, notice }: { onLogin: (token: string, user: CurrentUser) => void; notice?: string }) {
   const [loginValue, setLoginValue] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -35,12 +35,90 @@ function LoginScreen({ onLogin }: { onLogin: (token: string, user: CurrentUser) 
     }
   }
 
-  return <main className="login-page"><section className="login-card"><div className="login-mark">ПК</div><p className="eyebrow">PK CONTROL</p><h1>Производственный контроль</h1><p className="muted">Войдите, чтобы работать со справочниками и данными системы.</p><form onSubmit={submit}><label>Логин<input autoComplete="username" value={loginValue} onChange={(event) => setLoginValue(event.target.value)} required /></label><label>Пароль<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={loading}>{loading ? 'Выполняется вход…' : 'Войти'}</button></form><p className="login-hint">Первого администратора создаёт системный администратор после настройки сервера.</p></section></main>
+  return <main className="login-page"><section className="login-card"><div className="login-mark">ПК</div><p className="eyebrow">PK CONTROL</p><h1>Производственный контроль</h1><p className="muted">Войдите, чтобы работать со справочниками и данными системы.</p>{notice && <p className="login-note">{notice}</p>}<form onSubmit={submit}><label>Логин<input autoComplete="username" value={loginValue} onChange={(event) => setLoginValue(event.target.value)} required /></label><label>Пароль<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>{error && <p className="form-error">{error}</p>}<button className="primary-button" disabled={loading}>{loading ? 'Выполняется вход…' : 'Войти'}</button></form><p className="login-hint">Первого администратора создаёт системный администратор после настройки сервера.</p></section></main>
 }
 
 
-function Dashboard() {
-  return <><div className="title-row"><div><p className="eyebrow">PK CONTROL</p><h1>Дашборд</h1></div><span className="period">Этап 2 · Справочники и доступ</span></div><div className="notice"><strong>Справочники и роли готовы к настройке.</strong><span>Проверки и реестр нарушений будут добавлены следующим этапом.</span></div><section className="kpis" aria-label="Ключевые показатели">{['Проверок', 'Нарушений', 'Устранено', 'Не устранено', 'Просрочено', 'Срок ≤ 7 дней'].map((label) => <article className="kpi" key={label}><span>{label}</span><strong>—</strong><small>Данные появятся после миграции журнала</small></article>)}</section></>
+const controlTypeColors: Record<string, string> = { PC_III: '#176fca', PC_II: '#2abf88', ROSTECHNADZOR: '#e8930c', GAZNADZOR: '#8b5cf6' }
+function controlTypeColor(code: string) { return controlTypeColors[code] ?? '#687d91' }
+type AnalyticsFilterState = { dateFrom: string; dateTo: string; controlType: string; department: string; object: string; severity: string; status: string }
+const emptyAnalyticsFilters = (): AnalyticsFilterState => ({ dateFrom: '', dateTo: '', controlType: '', department: '', object: '', severity: '', status: '' })
+function analyticsParams(filters: AnalyticsFilterState): AnalyticsFilterParams { return { date_from: filters.dateFrom || undefined, date_to: filters.dateTo || undefined, control_type_id: filters.controlType || undefined, department_id: filters.department || undefined, object_id: filters.object || undefined, severity: filters.severity || undefined, status: filters.status || undefined } }
+
+function DonutChart({ parts, centerLabel }: { parts: { label: string; value: number; color: string }[]; centerLabel: string }) {
+  const total = parts.reduce((sum, part) => sum + part.value, 0)
+  const radius = 60
+  const circumference = 2 * Math.PI * radius
+  let offset = 0
+  return <div className="donut-wrap"><svg viewBox="0 0 160 160" role="img" aria-label={`${centerLabel}: ${total}`}><g transform="rotate(-90 80 80)"><circle cx="80" cy="80" r={radius} fill="none" stroke="#e8edf4" strokeWidth="22" />{parts.filter((part) => part.value > 0).map((part) => { const length = (part.value / total) * circumference; const segment = <circle key={part.label} cx="80" cy="80" r={radius} fill="none" stroke={part.color} strokeWidth="22" strokeDasharray={`${length} ${circumference - length}`} strokeDashoffset={-offset} />; offset += length; return segment })}</g><text x="80" y="77" textAnchor="middle" className="donut-total">{total}</text><text x="80" y="95" textAnchor="middle" className="donut-label">{centerLabel}</text></svg>{parts.length > 0 && <ul className="donut-legend">{parts.map((part) => <li key={part.label}><span className="legend-dot" style={{ background: part.color }} />{part.label}<strong>{part.value}</strong></li>)}</ul>}{total === 0 && <p className="empty">Нет данных.</p>}</div>
+}
+
+function HBarList({ items }: { items: { id: string; name: string; value: number; color?: string }[] }) {
+  if (items.length === 0) return <p className="empty">Нет данных.</p>
+  const max = Math.max(...items.map((item) => item.value))
+  return <div className="hbar-list">{items.map((item) => <div className="hbar-row" key={item.id}><span className="hbar-name" title={item.name}>{item.name}</span><span className="hbar-track"><span className="hbar-fill" style={{ width: `${Math.max(3, Math.round((item.value / max) * 100))}%`, ...(item.color ? { background: item.color } : {}) }} /></span><span className="hbar-value">{item.value}</span></div>)}</div>
+}
+
+function useAnalytics(token: string, filters: AnalyticsFilterState) {
+  const [data, setData] = useState<AnalyticsResponse | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    api.analytics(token, analyticsParams(filters)).then((result) => { if (!cancelled) setData(result) }).catch((reason: unknown) => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'Не удалось загрузить аналитику') }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [token, filters])
+  return { data, error, loading }
+}
+
+function AnalyticsKpis({ summary, onOpenStatus }: { summary: AnalyticsSummary; onOpenStatus: (status: string) => void }) {
+  return <section className="kpis wide" aria-label="Показатели по нарушениям"><button className="kpi" type="button" onClick={() => onOpenStatus('')}><span>Всего нарушений</span><strong>{summary.total}</strong><small>аннулированные и ПК II исключены</small></button><button className="kpi" type="button" onClick={() => onOpenStatus('eliminated')}><span>Устранено</span><strong>{summary.eliminated}</strong><small>в срок и с просрочкой</small></button><button className="kpi" type="button" onClick={() => onOpenStatus('not_eliminated')}><span>Не устранено</span><strong>{summary.not_eliminated}</strong><small>открытые мероприятия</small></button><button className="kpi" type="button" onClick={() => onOpenStatus('overdue')}><span>Просрочено</span><strong>{summary.overdue}</strong><small>срок истёк</small></button><button className="kpi" type="button" onClick={() => onOpenStatus('due_soon')}><span>Срок ≤ 7 дней</span><strong>{summary.due_soon}</strong><small>приближается срок</small></button><button className="kpi" type="button" onClick={() => onOpenStatus('eliminated_late')}><span>Устранено с просрочкой</span><strong>{summary.eliminated_late}</strong><small>после истечения срока</small></button><button className="kpi" type="button" onClick={() => onOpenStatus('heavy')}><span>Критичные</span><strong>{summary.heavy}</strong><small>тяжесть 8–9</small></button></section>
+}
+
+function Dashboard({ token, onOpenDeadlines }: { token: string; onOpenDeadlines: (controlTypeId?: string, status?: string) => void }) {
+  const [filters, setFilters] = useState<AnalyticsFilterState>(emptyAnalyticsFilters)
+  const [departments, setDepartments] = useState<ReferenceItem[]>([])
+  const [objects, setObjects] = useState<ObjectItem[]>([])
+  const { data, error, loading } = useAnalytics(token, filters)
+  useEffect(() => { api.references(token, 'departments').then(setDepartments).catch(() => setDepartments([])); api.objects(token).then(setObjects).catch(() => setObjects([])) }, [token])
+  const grandTotal = data?.summary.total ?? 0
+  const departmentSum = (data?.by_department ?? []).reduce((sum, item) => sum + item.total, 0)
+  const objectSum = (data?.by_object ?? []).reduce((sum, item) => sum + item.total, 0)
+  const multiScope = departmentSum > grandTotal || objectSum > grandTotal
+  const periodNote = data?.period_from || data?.period_to ? `Период: ${data?.period_from ?? '…'} — ${data?.period_to ?? '…'}` : 'Период: все даты'
+  const heavyDeptNote = (data?.by_department ?? []).filter((item) => item.heavy > 0).map((item) => `${item.name} — ${item.heavy}`).join(' · ')
+  const heavyObjectNote = (data?.by_object ?? []).filter((item) => item.heavy > 0).map((item) => `${item.name} — ${item.heavy}`).join(' · ')
+  const typeCards = data?.by_control_type ?? []
+  const overdueDepts = [...(data?.by_department ?? [])].filter((item) => item.overdue > 0).sort((a, b) => b.overdue - a.overdue || a.name.localeCompare(b.name, 'ru')).map((item) => ({ id: item.department_id, name: item.name, value: item.overdue, color: '#b32929' }))
+  return <>
+    <div className="title-row"><div><p className="eyebrow">PK CONTROL</p><h1>Дашборд</h1></div><span className="period">{periodNote}</span></div>
+    <section className="panel form-panel dashboard-filters"><div className="filter-chips">
+      <label className="filter-chip">Период с<input type="date" value={filters.dateFrom} onChange={(event) => setFilters({ ...filters, dateFrom: event.target.value })} />—<input type="date" value={filters.dateTo} onChange={(event) => setFilters({ ...filters, dateTo: event.target.value })} /></label>
+      <label className="filter-chip">Подразделение<select value={filters.department} onChange={(event) => setFilters({ ...filters, department: event.target.value })}><option value="">все</option>{departments.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label className="filter-chip">Объект<select value={filters.object} onChange={(event) => setFilters({ ...filters, object: event.target.value })}><option value="">все</option>{objects.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label className="filter-chip">Тяжесть<select value={filters.severity} onChange={(event) => setFilters({ ...filters, severity: event.target.value })}><option value="">любая</option>{[1, 2, 3, 4, 5, 6, 7, 8, 9].map((value) => <option key={value} value={String(value)}>{value}</option>)}</select></label>
+      <button className="filter-chip reset" type="button" onClick={() => setFilters(emptyAnalyticsFilters())}>Сброс</button>
+    </div></section>
+    {error && <p className="form-error">{error}</p>}
+    {loading ? <p className="empty">Загрузка…</p> : data ? <>
+      <AnalyticsKpis summary={data.summary} onOpenStatus={(status) => onOpenDeadlines('all', status)} />
+      <section className="analytics-cards" aria-label="Нарушения по видам контроля">{typeCards.map((item) => <div className="chart-card analytics-type-card" key={item.control_type_id} role="button" tabIndex={0} style={{ borderTopColor: controlTypeColor(item.code) }} onClick={() => onOpenDeadlines(item.control_type_id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpenDeadlines(item.control_type_id) } }}>
+        <span className="analytics-type-head"><strong style={{ color: controlTypeColor(item.code) }}>{controlTypeLabel(item.code, item.name)}</strong><span className="analytics-type-share">{grandTotal > 0 ? Math.round((item.total / grandTotal) * 100) : 0}% от всех</span></span>
+        <DonutChart parts={[{ label: 'Устранено', value: item.eliminated, color: '#2abf88' }, { label: 'Не устранено', value: item.not_eliminated, color: '#176fca' }, { label: 'Просрочено', value: item.overdue, color: '#b32929' }]} centerLabel="нарушений" />
+        <span className="type-card-stats quad"><span className="stat ok"><strong>{item.eliminated}</strong> устранено</span><span className="stat"><strong>{item.not_eliminated}</strong> не устранено</span><span className="stat overdue"><strong>{item.overdue}</strong> просрочено</span><span className="stat heavy"><strong>{item.heavy}</strong> критичных</span></span>
+        <span className="mini-progress">{([['Устранено', '#2abf88', item.eliminated], ['Не устранено', '#176fca', item.not_eliminated], ['Просрочено', '#b32929', item.overdue]] as const).filter((part) => part[2] > 0).map((part) => <span key={part[0]} style={{ background: part[1], flexGrow: part[2] }} title={`${part[0]}: ${part[2]}`} />)}</span>
+        <span className="analytics-type-hint">Нажмите, чтобы открыть «Контроль сроков» по этому виду</span>
+      </div>)}</section>
+      {multiScope && <p className="muted-note">Суммы по подразделениям ({departmentSum}) и по объектам ({objectSum}) больше общего числа нарушений ({data.summary.total}): одно нарушение может иметь несколько ответственных подразделений и затрагивать несколько объектов — в каждом разрезе оно учитывается по своим мероприятиям.</p>}
+      <section className="dashboard-bottom">
+        <article className="chart-card"><h2>По подразделениям</h2><div className="chart-body"><HBarList items={data.by_department.map((item) => ({ id: item.department_id, name: item.name, value: item.total }))} /></div>{heavyDeptNote && <p className="chart-note">Критичные: {heavyDeptNote}.</p>}</article>
+        <article className="chart-card"><h2>По объектам</h2><div className="chart-body"><HBarList items={data.by_object.map((item) => ({ id: item.object_id, name: item.name, value: item.total }))} /></div>{heavyObjectNote && <p className="chart-note">Критичные: {heavyObjectNote}.</p>}</article>
+        <article className="chart-card clickable-card" role="button" tabIndex={0} onClick={() => onOpenDeadlines('all', 'overdue')} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpenDeadlines('all', 'overdue') } }}><h2>Топ подразделений · просрочено</h2><div className="chart-body"><HBarList items={overdueDepts} /></div><p className="chart-note">Нажмите на блок, чтобы открыть «Контроль сроков» с просроченными нарушениями.</p></article>
+      </section>
+    </> : null}
+  </>
 }
 
 function RegistryWorkspace({ token, kind }: { token: string; kind: 'inspections' | 'violations' }) {
@@ -184,6 +262,8 @@ const deadlineStatusChips = [
   { value: 'due_soon', label: 'Срок ≤ 7 дней' },
   { value: 'not_eliminated', label: 'Не устранено' },
   { value: 'eliminated', label: 'Устранено' },
+  { value: 'eliminated_late', label: 'Устранено с просрочкой' },
+  { value: 'heavy', label: 'Критичные' },
 ]
 
 function controlTypeLabel(code: string, name: string) { if (code === 'PC_III') return 'ПК III уровня'; if (code === 'PC_II') return 'ПК II'; if (code === 'ROSTECHNADZOR') return 'Ростехнадзор'; if (code === 'GAZNADZOR') return 'Газнадзор'; return name }
@@ -197,15 +277,15 @@ function deviationCell(item: DeadlineControlItem) { if (item.status === 'overdue
 function deviationKind(item: DeadlineControlItem) { if (item.status === 'overdue') return 'overdue'; if (item.elimination_date) return 'eliminated'; if (item.days_left !== null) return 'left'; return 'none' }
 function inDateRange(value: string | null, from: string, to: string) { if (!from && !to) return true; if (!value) return false; if (from && value < from) return false; if (to && value > to) return false; return true }
 
-function DeadlineWorkspace({ token }: { token: string }) {
+function DeadlineWorkspace({ token, initialTypeId, initialStatus }: { token: string; initialTypeId?: string | null; initialStatus?: string | null }) {
   const [data, setData] = useState<DeadlineControlResponse | null>(null)
   const [violations, setViolations] = useState<ViolationItem[]>([])
   const [inspections, setInspections] = useState<InspectionItem[]>([])
   const [departments, setDepartments] = useState<ReferenceItem[]>([])
   const [objects, setObjects] = useState<ObjectItem[]>([])
   const [persons, setPersons] = useState<PersonItem[]>([])
-  const [selectedType, setSelectedType] = useState<string | null>(null)
-  const [statusFilter, setStatusFilter] = useState('')
+  const [selectedType, setSelectedType] = useState<string | null>(initialTypeId ?? null)
+  const [statusFilter, setStatusFilter] = useState(initialStatus ?? '')
   const [departmentFilter, setDepartmentFilter] = useState('')
   const [objectFilter, setObjectFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
@@ -233,13 +313,17 @@ function DeadlineWorkspace({ token }: { token: string }) {
 
   const types = data?.types ?? []
   const items = data?.items ?? []
-  const activeType = types.find((item) => item.control_type_id === selectedType) ?? types[0] ?? null
-  const typeItems = activeType ? items.filter((item) => item.control_type_id === activeType.control_type_id) : []
+  const summary = data?.summary ?? null
+  const showAllTypes = selectedType === 'all'
+  const measureCounts = new Map<string, number>(); for (const entry of items) measureCounts.set(entry.control_type_id, (measureCounts.get(entry.control_type_id) ?? 0) + 1)
+  const activeType = showAllTypes ? null : types.find((item) => item.control_type_id === selectedType) ?? types[0] ?? null
+  const scopeLabel = showAllTypes ? 'все виды' : activeType ? controlTypeLabel(activeType.code, activeType.name) : ''
+  const typeItems = showAllTypes ? items : activeType ? items.filter((item) => item.control_type_id === activeType.control_type_id) : []
   const upcoming = typeItems
     .filter((item) => item.status !== 'eliminated' && (item.status === 'overdue' || item.due_soon))
     .sort((a, b) => (a.due_date ?? '9999-12-31').localeCompare(b.due_date ?? '9999-12-31') || a.person_name.localeCompare(b.person_name, 'ru'))
   const registryItems = typeItems
-    .filter((item) => statusFilter === '' || (statusFilter === 'eliminated' ? item.status === 'eliminated' : statusFilter === 'due_soon' ? item.due_soon : item.status === statusFilter))
+    .filter((item) => statusFilter === '' || (statusFilter === 'eliminated' ? item.status === 'eliminated' : statusFilter === 'due_soon' ? item.due_soon : statusFilter === 'eliminated_late' ? item.eliminated_late : statusFilter === 'heavy' ? (violations.find((v) => v.id === item.violation_id)?.severity ?? 0) >= 8 : item.status === statusFilter))
     .filter((item) => !departmentFilter || item.department_id === departmentFilter)
     .filter((item) => !objectFilter || item.object_id === objectFilter)
     .filter((item) => !severityFilter || (violations.find((v) => v.id === item.violation_id)?.severity ?? 0) === Number(severityFilter))
@@ -263,9 +347,9 @@ function DeadlineWorkspace({ token }: { token: string }) {
   return <>
     <div className="title-row"><div><p className="eyebrow">КОНТРОЛЬ</p><h1>Контроль сроков</h1></div></div>
     {loading ? <p className="empty">Загрузка…</p> : error ? <p className="form-error">{error}</p> : <>
-      <div className="type-cards">{types.map((item) => <button className={activeType && item.control_type_id === activeType.control_type_id ? 'type-card active' : 'type-card'} key={item.control_type_id} type="button" onClick={() => { setSelectedType(item.control_type_id); resetColumnFilters() }}><span className="type-card-head"><strong>{controlTypeLabel(item.code, item.name)}</strong>{activeType && item.control_type_id === activeType.control_type_id && <span className="type-card-badge">Выбрано</span>}</span><span className="type-card-total">{item.total}</span><span className="type-card-caption">всего нарушений</span><span className="type-card-stats"><span className="stat overdue"><strong>{item.overdue}</strong> просрочено</span><span className="stat soon"><strong>{item.due_soon}</strong> срок ≤ 7 дней</span><span className="stat"><strong>{item.not_eliminated}</strong> не устранено</span></span></button>)}</div>
-      {activeType && <section className="panel"><div className="panel-header"><div><h2>Ближайшие сроки · {controlTypeLabel(activeType.code, activeType.name)}</h2></div><span className="counter">{upcoming.length}</span></div>{upcoming.length === 0 ? <p className="empty">Просроченных и приближающихся сроков нет.</p> : <ul className="due-list">{upcoming.map((item) => <li key={item.measure_id}><button className="due-item" type="button" onClick={() => setSelectedViolationId(item.violation_id)}><span className="due-date">{item.due_date ? formatDueTitle(item.due_date) : 'Срок не задан'}</span><span className="due-main"><strong>{item.violation_formulation}</strong><small>{item.department_name} · {item.object_name} · Акт {item.document_number}</small></span><span className={item.status === 'overdue' ? 'due-badge overdue' : 'due-badge soon'}>{item.status === 'overdue' ? `Просрочено · ${item.days_overdue} ${pluralDays(item.days_overdue)}` : item.days_left === 0 ? 'Срок сегодня' : `Осталось ${item.days_left} ${pluralDays(item.days_left ?? 0)}`}</span></button></li>)}</ul>}</section>}
-      {activeType && <section className="panel"><div className="panel-header"><div><h2>Реестр нарушений · {controlTypeLabel(activeType.code, activeType.name)}</h2></div><div className="header-actions"><button className="logout small-button" type="button" onClick={resetColumnFilters}>Сброс фильтров</button><span className="counter">{registryItems.length}</span></div></div>
+      <div className="type-cards">{summary && <button className={showAllTypes ? 'type-card active' : 'type-card'} type="button" onClick={() => { setSelectedType('all'); resetColumnFilters() }}><span className="type-card-head"><strong>Все виды</strong>{showAllTypes && <span className="type-card-badge">Выбрано</span>}</span><span className="type-card-total">{types.reduce((sum, item) => sum + item.total, 0)}</span><span className="type-card-caption">всего нарушений</span><span className="type-card-caption">мероприятий по устранению: {items.length}</span><span className="type-card-stats"><span className="stat overdue"><strong>{summary.overdue}</strong> просрочено</span><span className="stat soon"><strong>{summary.due_soon}</strong> срок ≤ 7 дней</span><span className="stat"><strong>{summary.not_eliminated}</strong> не устранено</span></span></button>}{types.map((item) => <button className={activeType && item.control_type_id === activeType.control_type_id ? 'type-card active' : 'type-card'} key={item.control_type_id} type="button" onClick={() => { setSelectedType(item.control_type_id); resetColumnFilters() }}><span className="type-card-head"><strong>{controlTypeLabel(item.code, item.name)}</strong>{activeType && item.control_type_id === activeType.control_type_id && <span className="type-card-badge">Выбрано</span>}</span><span className="type-card-total">{item.total}</span><span className="type-card-caption">всего нарушений</span><span className="type-card-caption">мероприятий по устранению: {measureCounts.get(item.control_type_id) ?? 0}</span><span className="type-card-stats"><span className="stat overdue"><strong>{item.overdue}</strong> просрочено</span><span className="stat soon"><strong>{item.due_soon}</strong> срок ≤ 7 дней</span><span className="stat"><strong>{item.not_eliminated}</strong> не устранено</span></span></button>)}</div>
+      {(activeType || showAllTypes) && <section className="panel"><div className="panel-header"><div><h2>Ближайшие сроки · {scopeLabel}</h2></div><span className="counter">{upcoming.length}</span></div>{upcoming.length === 0 ? <p className="empty">Просроченных и приближающихся сроков нет.</p> : <ul className="due-list">{upcoming.map((item) => <li key={item.measure_id}><button className="due-item" type="button" onClick={() => setSelectedViolationId(item.violation_id)}><span className="due-date">{item.due_date ? formatDueTitle(item.due_date) : 'Срок не задан'}</span><span className="due-main"><strong>{item.violation_formulation}</strong><small>{item.department_name} · {item.object_name} · Акт {item.document_number}</small></span><span className={item.status === 'overdue' ? 'due-badge overdue' : 'due-badge soon'}>{item.status === 'overdue' ? `Просрочено · ${item.days_overdue} ${pluralDays(item.days_overdue)}` : item.days_left === 0 ? 'Срок сегодня' : `Осталось ${item.days_left} ${pluralDays(item.days_left ?? 0)}`}</span></button></li>)}</ul>}</section>}
+      {(activeType || showAllTypes) && <section className="panel"><div className="panel-header"><div><h2>Реестр нарушений · {scopeLabel}</h2></div><div className="header-actions"><button className="logout small-button" type="button" onClick={resetColumnFilters}>Сброс фильтров</button><span className="counter">{registryItems.length}</span></div></div>
         <div className="registry-toolbar">
           <div className="tab-list">{deadlineStatusChips.map((chip) => <button className={statusFilter === chip.value ? 'tab active-tab' : 'tab'} key={chip.value || 'all'} type="button" onClick={() => setStatusFilter(chip.value)}>{chip.label}</button>)}</div>
           <div className="deadline-filters"><label>Акт-предписание<select value={actFilter} onChange={(event) => setActFilter(event.target.value)}><option value="">Все акты</option>{actOptions.map(([id, number]) => <option key={id} value={id}>{number}</option>)}</select></label><label>Дата проверки с<input type="date" value={inspectionDateFrom} onChange={(event) => setInspectionDateFrom(event.target.value)} /></label><label>Дата проверки по<input type="date" value={inspectionDateTo} onChange={(event) => setInspectionDateTo(event.target.value)} /></label><label>Ответственный<select value={personFilter} onChange={(event) => setPersonFilter(event.target.value)}><option value="">Все ответственные</option>{deadlinePersonOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label><label>Подразделение<select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)}><option value="">Все подразделения</option>{departmentOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><label>Объект<select value={objectFilter} onChange={(event) => setObjectFilter(event.target.value)}><option value="">Все объекты</option>{objectOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label><label>Нарушение<input placeholder="Содержит текст…" value={formulationFilter} onChange={(event) => setFormulationFilter(event.target.value)} /></label><label>Срок с<input type="date" value={dueDateFrom} onChange={(event) => setDueDateFrom(event.target.value)} /></label><label>Срок по<input type="date" value={dueDateTo} onChange={(event) => setDueDateTo(event.target.value)} /></label><label>Степень<select value={severityFilter} onChange={(event) => setSeverityFilter(event.target.value)}><option value="">Любая</option>{severityValues.map((value) => <option key={value} value={String(value)}>{value}</option>)}</select></label><label>Отклонение<select value={deviationFilter} onChange={(event) => setDeviationFilter(event.target.value)}><option value="">Любое</option><option value="overdue">Просрочено</option><option value="left">Осталось дней</option><option value="eliminated">Дата устранения</option><option value="none">Без расчёта</option></select></label></div>
@@ -334,22 +418,32 @@ function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('pk-control-token') ?? '')
   const [user, setUser] = useState<CurrentUser | null>(null)
   const [view, setView] = useState<View>('dashboard')
+  const [deadlineInitialType, setDeadlineInitialType] = useState<string | null>(null)
+  const [deadlineInitialStatus, setDeadlineInitialStatus] = useState<string | null>(null)
+  const [deadlineVisitCount, setDeadlineVisitCount] = useState(0)
+  const [sessionExpired, setSessionExpired] = useState(false)
 
+  useEffect(() => {
+    setUnauthorizedHandler(() => { sessionStorage.removeItem('pk-control-token'); setToken(''); setUser(null); setSessionExpired(true) })
+    return () => { setUnauthorizedHandler(null) }
+  }, [])
   useEffect(() => { if (token && !user) api.me(token).then(setUser).catch(() => { sessionStorage.removeItem('pk-control-token'); setToken('') }) }, [token, user])
   const displayName = useMemo(() => user?.display_name ?? 'Пользователь', [user])
-  if (!token || !user) return <LoginScreen onLogin={(nextToken, nextUser) => { sessionStorage.setItem('pk-control-token', nextToken); setToken(nextToken); setUser(nextUser) }} />
+  if (!token || !user) return <LoginScreen notice={sessionExpired ? 'Срок действия сессии истёк. Войдите снова.' : undefined} onLogin={(nextToken, nextUser) => { sessionStorage.setItem('pk-control-token', nextToken); setToken(nextToken); setUser(nextUser); setSessionExpired(false) }} />
+
+  function openDeadlines(controlTypeId?: string, status?: string) { setDeadlineInitialType(controlTypeId ?? null); setDeadlineInitialStatus(status ?? null); setDeadlineVisitCount((count) => count + 1); setView('deadlines') }
 
   function selectNavigation(item: string) {
     if (item === 'Проверки') setView('inspections')
     else if (item === 'Нарушения') setView('violations')
     else if (item === 'Импорт') setView('imports')
-    else if (item === 'Контроль сроков') setView('deadlines')
+    else if (item === 'Контроль сроков') openDeadlines()
     else if (item === 'Справочники') setView('references')
     else if (item === 'Пользователи и роли') setView('users')
     else setView('dashboard')
   }
 
-  return <div className="app-shell"><aside className="sidebar" aria-label="Основная навигация"><div className="brand"><span className="brand-mark">ПК</span><div><strong>Производственный контроль</strong><small>Единая система учёта</small></div></div><nav>{navigation.map((item, index) => { const active = (item === 'Дашборд' && view === 'dashboard') || (item === 'Проверки' && view === 'inspections') || (item === 'Нарушения' && view === 'violations') || (item === 'Импорт' && view === 'imports') || (item === 'Контроль сроков' && view === 'deadlines') || (item === 'Справочники' && view === 'references') || (item === 'Пользователи и роли' && view === 'users'); return <button className={active ? 'nav-item active' : 'nav-item'} key={item} type="button" onClick={() => selectNavigation(item)}><span className="nav-icon" aria-hidden="true">{index + 1}</span>{item}</button> })}</nav><div className="sidebar-footer"><span className="status-dot" /> Система работает<small>База данных: локальная</small><small>Версия 0.2.0</small></div></aside><main className="workspace"><header className="topbar"><label className="search"><span>⌕</span><input placeholder="Поиск будет доступен после создания реестра" disabled /></label><div className="user-panel"><div><strong>{displayName}</strong><small>{user.roles.join(', ')}</small></div><button className="logout" onClick={() => { sessionStorage.removeItem('pk-control-token'); setToken(''); setUser(null) }}>Выйти</button></div></header><section className="content">{view === 'inspections' ? <RegistryWorkspace key="inspections" token={token} kind="inspections" /> : view === 'violations' ? <RegistryWorkspace key="violations" token={token} kind="violations" /> : view === 'imports' ? <ImportWorkspace token={token} /> : view === 'deadlines' ? <DeadlineWorkspace token={token} /> : view === 'references' ? <ReferenceWorkspace token={token} user={user} /> : view === 'users' ? <UsersWorkspace token={token} /> : <Dashboard />}</section></main></div>
+  return <div className="app-shell"><aside className="sidebar" aria-label="Основная навигация"><div className="brand"><span className="brand-mark">ПК</span><div><strong>Производственный контроль</strong><small>Единая система учёта</small></div></div><nav>{navigation.map((item, index) => { const active = (item === 'Дашборд' && view === 'dashboard') || (item === 'Проверки' && view === 'inspections') || (item === 'Нарушения' && view === 'violations') || (item === 'Импорт' && view === 'imports') || (item === 'Контроль сроков' && view === 'deadlines') || (item === 'Справочники' && view === 'references') || (item === 'Пользователи и роли' && view === 'users'); return <button className={active ? 'nav-item active' : 'nav-item'} key={item} type="button" onClick={() => selectNavigation(item)}><span className="nav-icon" aria-hidden="true">{index + 1}</span>{item}</button> })}</nav><div className="sidebar-footer"><span className="status-dot" /> Система работает<small>База данных: локальная</small><small>Версия 0.2.0</small></div></aside><main className="workspace"><header className="topbar"><label className="search"><span>⌕</span><input placeholder="Поиск будет доступен после создания реестра" disabled /></label><div className="user-panel"><div><strong>{displayName}</strong><small>{user.roles.join(', ')}</small></div><button className="logout" onClick={() => { sessionStorage.removeItem('pk-control-token'); setToken(''); setUser(null) }}>Выйти</button></div></header><section className="content">{view === 'inspections' ? <RegistryWorkspace key="inspections" token={token} kind="inspections" /> : view === 'violations' ? <RegistryWorkspace key="violations" token={token} kind="violations" /> : view === 'imports' ? <ImportWorkspace token={token} /> : view === 'deadlines' ? <DeadlineWorkspace key={`deadlines-${deadlineVisitCount}`} token={token} initialTypeId={deadlineInitialType} initialStatus={deadlineInitialStatus} /> : view === 'references' ? <ReferenceWorkspace token={token} user={user} /> : view === 'users' ? <UsersWorkspace token={token} /> : <Dashboard token={token} onOpenDeadlines={openDeadlines} />}</section></main></div>
 }
 
 export default App
