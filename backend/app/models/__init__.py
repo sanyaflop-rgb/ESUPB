@@ -1,3 +1,10 @@
+from app.models.assessment import (
+    AssessmentCriterion,
+    AssessmentFact,
+    AssessmentPeriodType,
+    AssessmentResult,
+    AssessmentSubjectType,
+)
 from app.models.inspection import (
     DeadlineChange,
     DeadlineChangeRequest,
@@ -18,7 +25,8 @@ from app.models.reference import (
 from app.models.security import AuditLog, Role, User, UserRole
 
 __all__ = [
-    "AuditLog", "ControlType", "DeadlineChange", "DeadlineChangeRequest", "Department",
-    "Inspection", "InspectionKind", "Person", "ProductionObject", "RepeatLink", "Role", "User",
-    "UserRole", "Violation", "ViolationGroup", "ViolationMeasure", "ViolationType",
+    "AssessmentCriterion", "AssessmentFact", "AssessmentPeriodType", "AssessmentResult",
+    "AssessmentSubjectType", "AuditLog", "ControlType", "DeadlineChange", "DeadlineChangeRequest",
+    "Department", "Inspection", "InspectionKind", "Person", "ProductionObject", "RepeatLink", "Role",
+    "User", "UserRole", "Violation", "ViolationGroup", "ViolationMeasure", "ViolationType",
 ]

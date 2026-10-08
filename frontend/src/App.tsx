@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { api, ApiError, login as loginRequest, setUnauthorizedHandler, type AnalyticsFilterParams, type AnalyticsResponse, type AnalyticsSummary, type CurrentUser, type DeadlineChangeItem, type DeadlineControlItem, type DeadlineControlResponse, type ImportPreviewRow, type InspectionItem, type MeasureInput, type MeasureItem, type ObjectItem, type PersonItem, type ReferenceItem, type UserItem, type ViolationItem, type ViolationTypeItem } from './api'
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { api, ApiError, login as loginRequest, setUnauthorizedHandler, type AnalyticsFilterParams, type AnalyticsResponse, type AnalyticsSummary, type AssessmentComputeResponse, type AssessmentCriterionResult, type AssessmentPeriodType, type AssessmentResultDetail, type AssessmentResultItem, type CurrentUser, type DeadlineChangeItem, type DeadlineControlItem, type DeadlineControlResponse, type ImportPreviewRow, type InspectionItem, type MeasureInput, type MeasureItem, type ObjectItem, type PersonItem, type ReferenceItem, type UserItem, type ViolationItem, type ViolationTypeItem } from './api'
 
 const blankMeasure = (): MeasureInput => ({ department_id: '', object_id: '', person_id: '', elimination_measure: '', due_date: '' })
 
@@ -12,7 +12,7 @@ const referenceTabs = [
 
 const navigation = ['Дашборд', 'Проверки', 'Нарушения', 'Импорт', 'Контроль сроков', 'Оценка эффективности ПК', 'Отчёты и экспорт', 'Справочники', 'Пользователи и роли', 'История изменений']
 
-type View = 'dashboard' | 'inspections' | 'violations' | 'imports' | 'deadlines' | 'references' | 'users'
+type View = 'dashboard' | 'inspections' | 'violations' | 'imports' | 'deadlines' | 'assessment' | 'references' | 'users'
 
 function LoginScreen({ onLogin, notice }: { onLogin: (token: string, user: CurrentUser) => void; notice?: string }) {
   const [loginValue, setLoginValue] = useState('')
@@ -414,6 +414,199 @@ function UsersWorkspace({ token }: { token: string }) {
   return <><div className="title-row"><div><p className="eyebrow">АДМИНИСТРИРОВАНИЕ</p><h1>Пользователи и роли</h1></div><button className="primary-button" disabled>Создать пользователя</button></div><section className="panel"><div className="panel-header"><div><h2>Учетные записи</h2><p>Назначение ролей проверяется сервером; интерфейс не заменяет RBAC.</p></div></div>{error ? <p className="form-error">{error}</p> : <table><thead><tr><th>Логин</th><th>Отображаемое имя</th><th>Роли</th><th>Статус</th></tr></thead><tbody>{users.map((item) => <tr key={item.id}><td className="code">{item.login}</td><td>{item.display_name}</td><td>{item.roles.join(', ')}</td><td><span className={item.is_active ? 'chip success' : 'chip muted-chip'}>{item.is_active ? 'Активна' : 'Отключена'}</span></td></tr>)}</tbody></table>}{!error && users.length === 0 && <p className="empty">Пользователей пока нет.</p>}</section></>
 }
 
+type FactDraft = { values: Record<string, string>; notApplicable: boolean; comment: string }
+
+const assessmentPeriodOptions: Array<{ value: AssessmentPeriodType; label: string; indexes: number[] }> = [
+  { value: 'quarter', label: 'Квартал', indexes: [1, 2, 3, 4] },
+  { value: 'half_year', label: 'Полугодие', indexes: [1, 2] },
+  { value: 'nine_months', label: '9 месяцев', indexes: [1] },
+  { value: 'year', label: 'Год', indexes: [1] },
+]
+const assessmentPeriodLabel = (type: AssessmentPeriodType) => assessmentPeriodOptions.find((option) => option.value === type)?.label ?? type
+const assessmentIndexLabel = (type: AssessmentPeriodType, index: number) => (type === 'quarter' || type === 'half_year') ? (['', 'I', 'II', 'III', 'IV'][index] ?? String(index)) : ''
+const assessmentPeriodTitle = (type: AssessmentPeriodType, year: number, index: number) => `${assessmentPeriodLabel(type)}${assessmentIndexLabel(type, index) ? ` ${assessmentIndexLabel(type, index)}` : ''} ${year}`
+const assessmentInputTypeLabel: Record<string, string> = { manual: 'ручной ввод', auto: 'автоматически из журнала', mixed: 'журнал + ручной ввод' }
+const assessmentSubjectLabel = (subject: 'department' | 'service') => subject === 'department' ? 'подразделение' : 'Служба ППБиБДД'
+const formatDateTime = (value: string) => { try { return new Date(value).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return value } }
+const formatScore = (score: number | null) => score === null ? '—' : score.toFixed(2).replace('.', ',')
+
+function AssessmentVerdictChip({ verdict }: { verdict: string | null }) {
+  if (verdict === 'satisfactory') return <span className="chip success">удовлетворительно</span>
+  if (verdict === 'unsatisfactory') return <span className="chip danger">неудовлетворительно</span>
+  return <span className="chip muted-chip">не рассчитан</span>
+}
+
+function AssessmentScoreBadge({ criterion }: { criterion: AssessmentCriterionResult }) {
+  if (criterion.not_applicable) return <span className="score-badge score-na" title={criterion.reason}>Н/П</span>
+  if (criterion.missing_input) return <span className="score-badge score-missing" title={criterion.reason}>нет данных</span>
+  if (criterion.score === null) return <span className="score-badge score-missing">—</span>
+  return <span className={`score-badge score-${criterion.score}`}>{criterion.score}</span>
+}
+
+function AssessmentWorkspace({ token, user }: { token: string; user: CurrentUser }) {
+  const [periodType, setPeriodType] = useState<AssessmentPeriodType>('quarter')
+  const [periodYear, setPeriodYear] = useState(new Date().getFullYear())
+  const [periodIndex, setPeriodIndex] = useState(Math.floor(new Date().getMonth() / 3) + 1)
+  const [departmentId, setDepartmentId] = useState('')
+  const [departments, setDepartments] = useState<ReferenceItem[]>([])
+  const [data, setData] = useState<AssessmentComputeResponse | null>(null)
+  const [results, setResults] = useState<AssessmentResultItem[]>([])
+  const [detail, setDetail] = useState<AssessmentResultDetail | null>(null)
+  const [error, setError] = useState('')
+  const [resultsError, setResultsError] = useState('')
+  const [computing, setComputing] = useState(true)
+  const [savingFact, setSavingFact] = useState(false)
+  const [fixating, setFixating] = useState(false)
+  const [fixationNote, setFixationNote] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draft, setDraft] = useState<FactDraft | null>(null)
+  const [factError, setFactError] = useState('')
+  const canEditFacts = user.roles.includes('Administrator') || user.roles.includes('Specialist')
+  const periodIndexes = assessmentPeriodOptions.find((option) => option.value === periodType)?.indexes ?? [1]
+  const subjectName = departmentId ? departments.find((item) => item.id === departmentId)?.name ?? 'Подразделение' : 'Служба ППБиБДД'
+  const selectionChanged = data !== null && (data.period_type !== periodType || data.period_year !== periodYear || data.period_index !== periodIndex || (data.department_id ?? '') !== departmentId)
+  const sortedResults = [...results].sort((a, b) => b.created_at.localeCompare(a.created_at))
+  const yearOptions = Array.from({ length: 5 }, (_, offset) => new Date().getFullYear() - 2 + offset)
+
+  function closeEditor() { setEditingId(null); setDraft(null) }
+
+  function resetSelectionState() { closeEditor() }
+
+  function changePeriodType(value: AssessmentPeriodType) {
+    const nextIndexes = assessmentPeriodOptions.find((option) => option.value === value)?.indexes ?? [1]
+    setPeriodType(value)
+    if (!nextIndexes.includes(periodIndex)) setPeriodIndex(Math.min(periodIndex, nextIndexes[nextIndexes.length - 1]))
+    resetSelectionState()
+  }
+
+  async function runCompute() {
+    setComputing(true); setError('')
+    try {
+      const response = await api.assessmentCompute(token, { period_type: periodType, period_year: periodYear, period_index: periodIndex, department_id: departmentId || null })
+      setData(response); closeEditor()
+    } catch (reason) { setData(null); setError(reason instanceof Error ? reason.message : 'Не удалось выполнить расчёт') } finally { setComputing(false) }
+  }
+
+  async function saveFact(criterion: AssessmentCriterionResult) {
+    if (!draft) return
+    setSavingFact(true); setFactError('')
+    try {
+      const values: Record<string, unknown> = {}
+      for (const field of criterion.input_fields) {
+        const raw = draft.values[field.key] ?? ''
+        if (field.kind === 'bool') { if (raw === 'yes') values[field.key] = true; else if (raw === 'no') values[field.key] = false }
+        else if (field.kind === 'number') { if (raw.trim() !== '') { const parsed = Number(raw); if (Number.isFinite(parsed)) values[field.key] = parsed } }
+        else if (raw) values[field.key] = raw
+      }
+      await api.assessmentSaveFact(token, { criterion_id: criterion.criterion_id, period_type: periodType, period_year: periodYear, period_index: periodIndex, department_id: departmentId || null, values, not_applicable: draft.notApplicable, comment: draft.comment.trim() || null })
+      closeEditor()
+      await runCompute()
+    } catch (reason) { setFactError(reason instanceof Error ? reason.message : 'Не удалось сохранить исходные данные') } finally { setSavingFact(false) }
+  }
+
+  async function fixateResult() {
+    setFixating(true); setFixationNote(''); setError('')
+    try {
+      await api.assessmentSaveResult(token, { period_type: periodType, period_year: periodYear, period_index: periodIndex, department_id: departmentId || null })
+      setFixationNote(`Результат за «${assessmentPeriodTitle(periodType, periodYear, periodIndex)} · ${subjectName}» зафиксирован.`)
+      loadResults()
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Не удалось зафиксировать результат') } finally { setFixating(false) }
+  }
+
+  async function openDetail(item: AssessmentResultItem) {
+    setDetail(null); setError('')
+    try { setDetail(await api.assessmentResultDetail(token, item.id)) } catch (reason) { setError(reason instanceof Error ? reason.message : 'Не удалось загрузить зафиксированный результат') }
+  }
+
+  function loadResults() { api.assessmentResults(token).then(setResults).catch((reason: unknown) => setResultsError(reason instanceof Error ? reason.message : 'Не удалось загрузить результаты')) }
+
+  function openEditor(criterion: AssessmentCriterionResult) {
+    const values: Record<string, string> = {}
+    for (const field of criterion.input_fields) {
+      const raw = criterion.fact_values[field.key]
+      if (typeof raw === 'boolean') values[field.key] = raw ? 'yes' : 'no'
+      else if (raw !== null && raw !== undefined) values[field.key] = String(raw)
+    }
+    setDraft({ values, notApplicable: criterion.fact_not_applicable, comment: criterion.fact_comment ?? '' })
+    setEditingId(criterion.criterion_id)
+    setFactError('')
+  }
+
+  function toggleEditor(criterion: AssessmentCriterionResult) { if (editingId === criterion.criterion_id) closeEditor(); else openEditor(criterion) }
+
+  function renderCriteriaRows(criteria: AssessmentCriterionResult[], editable: boolean): ReactNode[] {
+    const rows: ReactNode[] = []
+    let lastSection = ''
+    for (const criterion of criteria) {
+      if (criterion.section_code !== lastSection) {
+        lastSection = criterion.section_code
+        rows.push(<tr className="section-row" key={`section-${criterion.section_code}`}><td colSpan={6}>{criterion.section_code} · {criterion.section_title}</td></tr>)
+      }
+      const canEdit = editable && canEditFacts && criterion.input_fields.length > 0
+      rows.push(<tr className={canEdit ? 'clickable-row' : undefined} key={criterion.criterion_id} onClick={canEdit ? () => toggleEditor(criterion) : undefined} title={canEdit ? 'Нажмите, чтобы ввести исходные данные' : undefined}>
+        <td className="code">{criterion.criterion_code}</td>
+        <td>{criterion.name}<small className="cell-note">{assessmentSubjectLabel(criterion.subject_type)} · {assessmentInputTypeLabel[criterion.input_type] ?? criterion.input_type}</small></td>
+        <td className="fact-cell">{criterion.fact ?? '—'}{canEdit && editingId !== criterion.criterion_id && <button className="logout small-button" type="button" onClick={(event) => { event.stopPropagation(); openEditor(criterion) }}>Исходные данные</button>}</td>
+        <td>{criterion.threshold ?? '—'}</td>
+        <td><AssessmentScoreBadge criterion={criterion} /></td>
+        <td className="reason-cell">{criterion.reason}</td>
+      </tr>)
+      if (editable && editingId === criterion.criterion_id && draft) {
+        rows.push(<tr className="assessment-editor-row" key={`${criterion.criterion_id}-editor`}><td colSpan={6}><div className="entry-form assessment-fact-form">
+          <strong>Исходные данные · {criterion.criterion_code}</strong>
+          {criterion.input_fields.map((field) => <label key={field.key}>{field.label}{field.kind === 'date' ? <input type="date" value={draft.values[field.key] ?? ''} onChange={(event) => setDraft({ ...draft, values: { ...draft.values, [field.key]: event.target.value } })} /> : field.kind === 'bool' ? <select value={draft.values[field.key] ?? ''} onChange={(event) => setDraft({ ...draft, values: { ...draft.values, [field.key]: event.target.value } })}><option value="">— не указано —</option><option value="yes">Да</option><option value="no">Нет</option></select> : <input type="number" min={0} step={1} value={draft.values[field.key] ?? ''} onChange={(event) => setDraft({ ...draft, values: { ...draft.values, [field.key]: event.target.value } })} />}</label>)}
+          <label className="checkbox-label"><input type="checkbox" checked={draft.notApplicable} onChange={(event) => setDraft({ ...draft, notApplicable: event.target.checked })} /> Неприменим в этом периоде (Н/П)</label>
+          <label className="wide">Комментарий<textarea value={draft.comment} onChange={(event) => setDraft({ ...draft, comment: event.target.value })} placeholder="Пояснение к исходным данным" /></label>
+          <div className="measure-actions wide"><button className="primary-button small-button" type="button" disabled={savingFact} onClick={() => void saveFact(criterion)}>{savingFact ? 'Сохранение…' : 'Сохранить и пересчитать'}</button><button className="logout small-button" type="button" disabled={savingFact} onClick={closeEditor}>Отмена</button></div>
+          {factError && <p className="form-error wide">{factError}</p>}
+        </div></td></tr>)
+      }
+    }
+    return rows
+  }
+
+  useEffect(() => { api.references(token, 'departments').then(setDepartments).catch(() => setDepartments([])) }, [token])
+  useEffect(() => { loadResults() }, [token])
+  useEffect(() => { void runCompute() }, [])
+
+  return <>
+    <div className="title-row"><div><p className="eyebrow">ОЦЕНКА ЭФФЕКТИВНОСТИ</p><h1>Оценка эффективности ПК</h1></div><span className="period">{assessmentPeriodTitle(periodType, periodYear, periodIndex)} · {subjectName}</span></div>
+    <section className="panel form-panel"><h2>Параметры оценки</h2><div className="entry-form assessment-params">
+      <label>Период<select value={periodType} onChange={(event) => changePeriodType(event.target.value as AssessmentPeriodType)}>{assessmentPeriodOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+      <label>Год<select value={String(periodYear)} onChange={(event) => { setPeriodYear(Number(event.target.value)); resetSelectionState() }}>{yearOptions.map((year) => <option key={year} value={String(year)}>{year}</option>)}</select></label>
+      <label>{periodType === 'quarter' ? 'Квартал' : periodType === 'half_year' ? 'Полугодие' : 'Подпериод'}<select value={String(periodIndex)} disabled={periodIndexes.length <= 1} onChange={(event) => { setPeriodIndex(Number(event.target.value)); resetSelectionState() }}>{periodIndexes.map((index) => <option key={index} value={String(index)}>{assessmentIndexLabel(periodType, index) || String(index)}</option>)}</select></label>
+      <label>Объект оценки<select value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); resetSelectionState() }}><option value="">Служба ППБиБДД (ПК III уровня)</option>{departments.filter((item) => item.is_active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <div className="assessment-actions"><button className="primary-button" type="button" disabled={computing} onClick={() => void runCompute()}>{computing ? 'Выполняется расчёт…' : 'Рассчитать'}</button></div>
+    </div></section>
+    {error && <p className="form-error">{error}</p>}
+    {computing ? <p className="empty">Выполняется расчёт…</p> : data ? <>
+      <section className="kpis" aria-label="Сводка оценки">
+        <div className="kpi"><span>Всего критериев</span><strong>{data.criteria.length}</strong><small>в справочнике оценки</small></div>
+        <div className="kpi"><span>Учитывается</span><strong>{data.summary.applicable_count}</strong><small>входят в средний балл</small></div>
+        <div className="kpi"><span>Неприменимо</span><strong>{data.summary.not_applicable_count}</strong><small>Н/П — вне расчёта</small></div>
+        <div className="kpi"><span>Нет данных</span><strong>{data.summary.missing_input_count}</strong><small>нужны исходные данные</small></div>
+        <div className="kpi"><span>Средний балл</span><strong>{formatScore(data.summary.average_score)}</strong><small>по учитываемым критериям</small></div>
+        <div className="kpi"><span>Вердикт</span><span className="verdict-value"><AssessmentVerdictChip verdict={data.summary.verdict} /></span><small>порог — 1,00</small></div>
+      </section>
+      {selectionChanged && <p className="muted-note">Параметры изменены — нажмите «Рассчитать», чтобы обновить расчёт.</p>}
+      {fixationNote && <p className="form-success">{fixationNote}</p>}
+      <section className="panel">
+        <div className="panel-header"><div><h2>Критерии оценки · {assessmentPeriodTitle(data.period_type, data.period_year, data.period_index)}</h2><p>Объект: {data.department_name ?? 'Служба ППБиБДД'} · баллы 0–2 и Н/П формируются автоматически из журнала и исходных данных.</p></div><div className="header-actions">{canEditFacts && <button className="primary-button" type="button" disabled={fixating} onClick={() => void fixateResult()}>{fixating ? 'Фиксация…' : 'Зафиксировать результат'}</button>}<span className="counter">{data.summary.applicable_count}</span></div></div>
+        <table className="criteria-table"><thead><tr><th>Код</th><th>Критерий</th><th>Факт</th><th>Порог</th><th>Балл</th><th>Причина</th></tr></thead><tbody>{renderCriteriaRows(data.criteria, true)}</tbody></table>
+      </section>
+    </> : null}
+    <section className="panel">
+      <div className="panel-header"><div><h2>Зафиксированные результаты</h2><p>Нажмите на строку, чтобы посмотреть критерии на момент фиксации.</p></div><span className="counter">{sortedResults.length}</span></div>
+      {resultsError ? <p className="form-error">{resultsError}</p> : sortedResults.length === 0 ? <p className="empty">Результаты ещё не зафиксированы.</p> : <table><thead><tr><th>Период</th><th>Объект оценки</th><th>Средний балл</th><th>Вердикт</th><th>Критерии</th><th>Создан</th></tr></thead><tbody>{sortedResults.map((item) => <tr key={item.id} className="clickable-row" onClick={() => void openDetail(item)}><td>{assessmentPeriodTitle(item.period_type, item.period_year, item.period_index)}</td><td>{item.department_name ?? 'Служба ППБиБДД'}</td><td>{formatScore(item.average_score)}</td><td><AssessmentVerdictChip verdict={item.verdict} /></td><td>{item.applicable_count} / {item.not_applicable_count} / {item.missing_input_count}<small className="cell-note">учитывается / Н/П / нет данных</small></td><td>{formatDateTime(item.created_at)}</td></tr>)}</tbody></table>}
+    </section>
+    {detail && <div className="modal-overlay" role="presentation" onClick={() => setDetail(null)}><section className="modal-card" role="dialog" aria-modal="true" aria-label="Зафиксированный результат оценки" onClick={(event) => event.stopPropagation()}>
+      <div className="panel-header"><div><h2>{assessmentPeriodTitle(detail.period_type, detail.period_year, detail.period_index)} · {detail.department_name ?? 'Служба ППБиБДД'}</h2><p>Зафиксировано {formatDateTime(detail.created_at)}; обновлено {formatDateTime(detail.updated_at)}.</p></div><button className="logout" onClick={() => setDetail(null)}>Закрыть</button></div>
+      <p className="muted-note">Средний балл <strong>{formatScore(detail.average_score)}</strong> · учитывается {detail.applicable_count} · Н/П {detail.not_applicable_count} · нет данных {detail.missing_input_count} · вердикт: <AssessmentVerdictChip verdict={detail.verdict} /></p>
+      <table className="criteria-table"><thead><tr><th>Код</th><th>Критерий</th><th>Факт</th><th>Порог</th><th>Балл</th><th>Причина</th></tr></thead><tbody>{renderCriteriaRows(detail.criteria_payload, false)}</tbody></table>
+    </section></div>}
+  </>
+}
+
 function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('pk-control-token') ?? '')
   const [user, setUser] = useState<CurrentUser | null>(null)
@@ -438,12 +631,13 @@ function App() {
     else if (item === 'Нарушения') setView('violations')
     else if (item === 'Импорт') setView('imports')
     else if (item === 'Контроль сроков') openDeadlines()
+    else if (item === 'Оценка эффективности ПК') setView('assessment')
     else if (item === 'Справочники') setView('references')
     else if (item === 'Пользователи и роли') setView('users')
     else setView('dashboard')
   }
 
-  return <div className="app-shell"><aside className="sidebar" aria-label="Основная навигация"><div className="brand"><span className="brand-mark">ПК</span><div><strong>Производственный контроль</strong><small>Единая система учёта</small></div></div><nav>{navigation.map((item, index) => { const active = (item === 'Дашборд' && view === 'dashboard') || (item === 'Проверки' && view === 'inspections') || (item === 'Нарушения' && view === 'violations') || (item === 'Импорт' && view === 'imports') || (item === 'Контроль сроков' && view === 'deadlines') || (item === 'Справочники' && view === 'references') || (item === 'Пользователи и роли' && view === 'users'); return <button className={active ? 'nav-item active' : 'nav-item'} key={item} type="button" onClick={() => selectNavigation(item)}><span className="nav-icon" aria-hidden="true">{index + 1}</span>{item}</button> })}</nav><div className="sidebar-footer"><span className="status-dot" /> Система работает<small>База данных: локальная</small><small>Версия 0.2.0</small></div></aside><main className="workspace"><header className="topbar"><label className="search"><span>⌕</span><input placeholder="Поиск будет доступен после создания реестра" disabled /></label><div className="user-panel"><div><strong>{displayName}</strong><small>{user.roles.join(', ')}</small></div><button className="logout" onClick={() => { sessionStorage.removeItem('pk-control-token'); setToken(''); setUser(null) }}>Выйти</button></div></header><section className="content">{view === 'inspections' ? <RegistryWorkspace key="inspections" token={token} kind="inspections" /> : view === 'violations' ? <RegistryWorkspace key="violations" token={token} kind="violations" /> : view === 'imports' ? <ImportWorkspace token={token} /> : view === 'deadlines' ? <DeadlineWorkspace key={`deadlines-${deadlineVisitCount}`} token={token} initialTypeId={deadlineInitialType} initialStatus={deadlineInitialStatus} /> : view === 'references' ? <ReferenceWorkspace token={token} user={user} /> : view === 'users' ? <UsersWorkspace token={token} /> : <Dashboard token={token} onOpenDeadlines={openDeadlines} />}</section></main></div>
+  return <div className="app-shell"><aside className="sidebar" aria-label="Основная навигация"><div className="brand"><span className="brand-mark">ПК</span><div><strong>Производственный контроль</strong><small>Единая система учёта</small></div></div><nav>{navigation.map((item, index) => { const active = (item === 'Дашборд' && view === 'dashboard') || (item === 'Проверки' && view === 'inspections') || (item === 'Нарушения' && view === 'violations') || (item === 'Импорт' && view === 'imports') || (item === 'Контроль сроков' && view === 'deadlines') || (item === 'Оценка эффективности ПК' && view === 'assessment') || (item === 'Справочники' && view === 'references') || (item === 'Пользователи и роли' && view === 'users'); return <button className={active ? 'nav-item active' : 'nav-item'} key={item} type="button" onClick={() => selectNavigation(item)}><span className="nav-icon" aria-hidden="true">{index + 1}</span>{item}</button> })}</nav><div className="sidebar-footer"><span className="status-dot" /> Система работает<small>База данных: локальная</small><small>Версия 0.2.0</small></div></aside><main className="workspace"><header className="topbar"><label className="search"><span>⌕</span><input placeholder="Поиск будет доступен после создания реестра" disabled /></label><div className="user-panel"><div><strong>{displayName}</strong><small>{user.roles.join(', ')}</small></div><button className="logout" onClick={() => { sessionStorage.removeItem('pk-control-token'); setToken(''); setUser(null) }}>Выйти</button></div></header><section className="content">{view === 'inspections' ? <RegistryWorkspace key="inspections" token={token} kind="inspections" /> : view === 'violations' ? <RegistryWorkspace key="violations" token={token} kind="violations" /> : view === 'imports' ? <ImportWorkspace token={token} /> : view === 'deadlines' ? <DeadlineWorkspace key={`deadlines-${deadlineVisitCount}`} token={token} initialTypeId={deadlineInitialType} initialStatus={deadlineInitialStatus} /> : view === 'assessment' ? <AssessmentWorkspace token={token} user={user} /> : view === 'references' ? <ReferenceWorkspace token={token} user={user} /> : view === 'users' ? <UsersWorkspace token={token} /> : <Dashboard token={token} onOpenDeadlines={openDeadlines} />}</section></main></div>
 }
 
 export default App
