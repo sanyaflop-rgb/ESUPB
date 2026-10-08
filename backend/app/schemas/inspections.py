@@ -205,6 +205,8 @@ class DeadlineControlItem(APIModel):
     inspection_id: UUID
     document_number: str
     inspection_date: date
+    control_type_id: UUID
+    control_type_code: str
     control_type_name: str
     department_id: UUID
     department_name: str
@@ -236,6 +238,21 @@ class DeadlineControlSummary(APIModel):
     eliminated_late: int
 
 
+class DeadlineTypeSummary(APIModel):
+    """Счётчики по виду контроля: нарушения считаются один раз, статус — по совокупности мер."""
+
+    control_type_id: UUID
+    code: str
+    name: str
+    total: int
+    overdue: int
+    due_soon: int
+    not_eliminated: int
+    eliminated: int
+    eliminated_late: int
+
+
 class DeadlineControlResponse(APIModel):
     summary: DeadlineControlSummary
+    types: list[DeadlineTypeSummary]
     items: list[DeadlineControlItem]

@@ -27,6 +27,7 @@ from app.schemas.inspections import (
     DeadlineControlItem,
     DeadlineControlResponse,
     DeadlineControlSummary,
+    DeadlineTypeSummary,
     EliminationCreate,
     ImportConfirm,
     ImportConfirmResponse,
@@ -192,6 +193,18 @@ def deadline_control_rank(item: DeadlineControlItem) -> int:
     if item.status == ViolationStatus.NOT_ELIMINATED:
         return 2
     return 3
+
+
+def violation_deadline_category(violation_id: UUID, entries: list[DeadlineControlItem]) -> str:
+    """Категория нарушения по совокупности его мер: нарушение считается один раз (см. D-014)."""
+    violation_entries = [entry for entry in entries if entry.violation_id == violation_id]
+    if violation_entries and all(entry.status == ViolationStatus.ELIMINATED for entry in violation_entries):
+        return "eliminated_late" if any(entry.eliminated_late for entry in violation_entries) else "eliminated"
+    if any(entry.status == ViolationStatus.OVERDUE for entry in violation_entries):
+        return "overdue"
+    if any(entry.due_soon for entry in violation_entries):
+        return "due_soon"
+    return "not_eliminated"
 
 
 def add_measures(database: Session, violation: Violation, values: list[dict[str, object]]) -> list[ViolationMeasure]:
@@ -457,7 +470,9 @@ def deadline_control(
         statement = statement.where(ViolationMeasure.person_id == person_id)
     today = datetime.now(UTC).date()
     entries: list[tuple[DeadlineControlItem, bool]] = []
+    type_labels: dict[UUID, tuple[int, str, str]] = {}
     for measure, violation, inspection, control_type, department, production_object, person in database.execute(statement):
+        type_labels[control_type.id] = (control_type.display_order, control_type.code, control_type.name)
         entries.append((
             DeadlineControlItem(
                 measure_id=measure.id,
@@ -465,6 +480,8 @@ def deadline_control(
                 inspection_id=inspection.id,
                 document_number=inspection.document_number,
                 inspection_date=inspection.inspection_date,
+                control_type_id=control_type.id,
+                control_type_code=control_type.code,
                 control_type_name=control_type.name,
                 department_id=department.id,
                 department_name=department.name,
@@ -496,6 +513,29 @@ def deadline_control(
         eliminated=sum(1 for item, _ in entries if item.status == ViolationStatus.ELIMINATED),
         eliminated_late=sum(1 for item, _ in entries if item.eliminated_late),
     )
+    all_items = [item for item, _ in entries]
+    grouped: dict[UUID, list[DeadlineControlItem]] = {}
+    for item in all_items:
+        grouped.setdefault(item.control_type_id, []).append(item)
+    types: list[DeadlineTypeSummary] = []
+    for control_type_id, type_entries in grouped.items():
+        violation_ids = {entry.violation_id for entry in type_entries}
+        categories = [violation_deadline_category(violation_id, type_entries) for violation_id in violation_ids]
+        display_order, code, name = type_labels[control_type_id]
+        types.append(
+            DeadlineTypeSummary(
+                control_type_id=control_type_id,
+                code=code,
+                name=name,
+                total=len(violation_ids),
+                overdue=categories.count("overdue"),
+                due_soon=categories.count("due_soon"),
+                not_eliminated=categories.count("not_eliminated"),
+                eliminated=categories.count("eliminated"),
+                eliminated_late=categories.count("eliminated_late"),
+            )
+        )
+    types.sort(key=lambda item: (type_labels[item.control_type_id][0], item.name))
     if status_filter == "overdue":
         entries = [entry for entry in entries if entry[0].status == ViolationStatus.OVERDUE]
     elif status_filter == "due_soon":
@@ -507,7 +547,7 @@ def deadline_control(
     elif status_filter == "eliminated_late":
         entries = [entry for entry in entries if entry[0].eliminated_late]
     items = sorted((item for item, _ in entries), key=lambda item: (deadline_control_rank(item), item.due_date or date.max, item.person_name))
-    return DeadlineControlResponse(summary=summary, items=items)
+    return DeadlineControlResponse(summary=summary, types=types, items=items)
 
 
 @router.get("/violations/{violation_id}", response_model=ViolationResponse)
